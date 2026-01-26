@@ -104,15 +104,45 @@ class NonIIDWrapper(Dataset):
     ) -> np.ndarray:
         num_attributes = self._targets.shape[1]
         if allowed_attributes is None:
-            return np.arange(num_attributes)
+            eligible = [
+                idx
+                for idx in range(num_attributes)
+                if len(self._attribute_values[idx]) >= 2
+            ]
+            if len(eligible) < 2:
+                raise ValueError(
+                    "NonIIDWrapper requires at least two attributes with at least two "
+                    "distinct values to sample non-iid batches."
+                )
+            return np.array(eligible)
         base_dataset = (
             self.dataset.dataset if isinstance(self.dataset, Subset) else self.dataset
         )
-        return np.array(
-            [base_dataset._attribute_to_index(attr) for attr in allowed_attributes]
-        )
+        resolved = [
+            base_dataset._attribute_to_index(attr) for attr in allowed_attributes
+        ]
+        invalid = [
+            idx
+            for idx in resolved
+            if len(self._attribute_values[idx]) < 2
+        ]
+        if invalid:
+            raise ValueError(
+                "NonIIDWrapper requires each allowed attribute to have at least two "
+                "distinct values."
+            )
+        if len(resolved) < 2:
+            raise ValueError(
+                "NonIIDWrapper requires at least two attributes to sample non-iid "
+                "batches."
+            )
+        return np.array(resolved)
 
     def _sample_two(self, values: Iterable) -> Tuple[int, int]:
+        if len(values) < 2:
+            raise ValueError(
+                "NonIIDWrapper requires at least two distinct values to sample."
+            )
         choices = self.rng.choice(values, size=2, replace=False)
         return choices[0], choices[1]
 
