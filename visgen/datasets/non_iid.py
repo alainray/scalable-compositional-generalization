@@ -121,22 +121,17 @@ class NonIIDWrapper(Dataset):
         resolved = [
             base_dataset._attribute_to_index(attr) for attr in allowed_attributes
         ]
-        invalid = [
+        eligible = [
             idx
             for idx in resolved
-            if len(self._attribute_values[idx]) < 2
+            if len(self._attribute_values[idx]) >= 2
         ]
-        if invalid:
-            raise ValueError(
-                "NonIIDWrapper requires each allowed attribute to have at least two "
-                "distinct values."
-            )
-        if len(resolved) < 2:
+        if len(eligible) < 2:
             raise ValueError(
                 "NonIIDWrapper requires at least two attributes to sample non-iid "
                 "batches."
             )
-        return np.array(resolved)
+        return np.array(eligible)
 
     def _sample_two(self, values: Iterable) -> Tuple[int, int]:
         if len(values) < 2:
