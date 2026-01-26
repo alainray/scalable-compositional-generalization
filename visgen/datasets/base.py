@@ -189,11 +189,11 @@ class BaseDataset(Dataset, ABC):
             for (i, size) in enumerate(factor_sizes)
         ]
         if "composition" in self._split:
-            max_excluded = np.product([size - 1 for size in factor_sizes])
+            max_excluded = np.prod([size - 1 for size in factor_sizes])
             num_excluded = model.new_int_var(0, max_excluded, "num_excluded")
             model.add_multiplication_equality(num_excluded, difficulties)
         else:
-            total = np.product(factor_sizes)
+            total = np.prod(factor_sizes)
             if self._split == "interpolation":
                 max_excluded = total - 2 ** len(factor_sizes)
             else:
