@@ -35,9 +35,10 @@ class BaseDataset(Dataset, ABC):
         self.ood_val_combinations = None
         if split_attributes is None:
             split_attributes = targets
-        if targets is not None:
+        if isinstance(targets, str):
             targets = targets.split("_")
-        split_attributes = split_attributes.split("_")
+        if isinstance(split_attributes, str):
+            split_attributes = split_attributes.split("_")
         self._dataset_images, self._dataset_targets = self._load_data(
             path, dataset_subset
         )
