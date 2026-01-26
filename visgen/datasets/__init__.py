@@ -1,3 +1,5 @@
+import logging
+
 from torch.utils.data import DataLoader, random_split
 
 from .cars3d import Cars3D
@@ -5,14 +7,29 @@ from .clevr import CLEVR
 from .dsprites import DSprites
 from .iraven import IRAVEN
 from .mpi3d import MPI3D
-from .non_iid import NonIIDWrapper
+from .non_iid import NonIIDWrapper, attribute_value_counts
 from .shapes3d import Shapes3D
 
 
-def _wrap_non_iid(dataset, cfg):
+LOGGER = logging.getLogger(__name__)
+
+
+def _wrap_non_iid(dataset, cfg, writer=None, label=None):
 	non_iid_cfg = getattr(cfg, "non_iid", None)
 	if not non_iid_cfg:
 		return dataset
+	counts = attribute_value_counts(dataset)
+	if writer is not None:
+		payload = {
+			f"{label}_attribute_{idx}_num_values": count
+			for idx, count in enumerate(counts)
+		}
+		writer.write(payload)
+	LOGGER.info(
+		"Dataset %s attribute value counts: %s",
+		label or getattr(cfg, "dataset", "unknown"),
+		counts,
+	)
 	return NonIIDWrapper(
 		dataset,
 		max_resample_attempts=non_iid_cfg.get("max_resample_attempts", 10_000),
@@ -55,7 +72,7 @@ def get_dataloaders(data_cfg, writer=None):
 			infos[f"{key}_volume"] = data.volume
 		writer.write(infos)
 		for (name, data) in datasets:
-			data = _wrap_non_iid(data, cfg)
+			data = _wrap_non_iid(data, cfg, writer=writer, label=key)
 			loader = DataLoader(
 				data,
 				batch_size=cfg.batch_size,

@@ -1,9 +1,43 @@
 from collections import defaultdict
+import logging
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset, Subset
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _extract_targets_and_attribute_values(
+    dataset: Dataset,
+) -> Tuple[np.ndarray, List[List]]:
+    base_dataset = dataset.dataset if isinstance(dataset, Subset) else dataset
+    if isinstance(dataset, Subset):
+        targets = base_dataset._dataset_targets[dataset.indices]
+    else:
+        targets = base_dataset._dataset_targets
+    if targets.ndim == 3:
+        if targets.shape[1] != 1:
+            raise ValueError("NonIIDWrapper supports only single-object datasets.")
+        targets = targets[:, 0, :]
+    elif targets.ndim != 2:
+        raise ValueError(
+            "NonIIDWrapper supports targets shaped as (N, M) or (N, 1, M)."
+        )
+    if getattr(base_dataset, "_attribute_values", None) is None:
+        attribute_values = [
+            np.unique(targets[:, i]).tolist() for i in range(targets.shape[1])
+        ]
+    else:
+        attribute_values = base_dataset._attribute_values
+    return targets, attribute_values
+
+
+def attribute_value_counts(dataset: Dataset) -> List[int]:
+    _, attribute_values = _extract_targets_and_attribute_values(dataset)
+    return [len(values) for values in attribute_values]
 
 
 class NonIIDWrapper(Dataset):
@@ -70,28 +104,7 @@ class NonIIDWrapper(Dataset):
         )
 
     def _prepare_targets(self, dataset: Dataset) -> Tuple[np.ndarray, List[List]]:
-        base_dataset = dataset.dataset if isinstance(dataset, Subset) else dataset
-        if isinstance(dataset, Subset):
-            targets = base_dataset._dataset_targets[dataset.indices]
-        else:
-            targets = base_dataset._dataset_targets
-        if targets.ndim == 3:
-            if targets.shape[1] != 1:
-                raise ValueError(
-                    "NonIIDWrapper supports only single-object datasets."
-                )
-            targets = targets[:, 0, :]
-        elif targets.ndim != 2:
-            raise ValueError(
-                "NonIIDWrapper supports targets shaped as (N, M) or (N, 1, M)."
-            )
-        if getattr(base_dataset, "_attribute_values", None) is None:
-            attribute_values = [
-                np.unique(targets[:, i]).tolist() for i in range(targets.shape[1])
-            ]
-        else:
-            attribute_values = base_dataset._attribute_values
-        return targets, attribute_values
+        return _extract_targets_and_attribute_values(dataset)
 
     def _build_index(self, targets: np.ndarray) -> dict:
         index = defaultdict(list)
@@ -104,13 +117,40 @@ class NonIIDWrapper(Dataset):
     ) -> np.ndarray:
         num_attributes = self._targets.shape[1]
         if allowed_attributes is None:
-            return np.arange(num_attributes)
+            eligible = [
+                idx
+                for idx in range(num_attributes)
+                if len(self._attribute_values[idx]) >= 2
+            ]
+            if len(eligible) < 2:
+                raise ValueError(
+                    "NonIIDWrapper requires at least two attributes with at least two "
+                    "distinct values to sample non-iid batches."
+                )
+            return np.array(eligible)
         base_dataset = (
             self.dataset.dataset if isinstance(self.dataset, Subset) else self.dataset
         )
-        return np.array(
-            [base_dataset._attribute_to_index(attr) for attr in allowed_attributes]
-        )
+        resolved = [
+            base_dataset._attribute_to_index(attr) for attr in allowed_attributes
+        ]
+        eligible = [
+            idx
+            for idx in resolved
+            if len(self._attribute_values[idx]) >= 2
+        ]
+        dropped = sorted(set(resolved) - set(eligible))
+        if dropped:
+            LOGGER.warning(
+                "NonIIDWrapper dropping attributes with <2 distinct values: %s",
+                dropped,
+            )
+        if len(eligible) < 2:
+            raise ValueError(
+                "NonIIDWrapper requires at least two attributes with at least two "
+                "distinct values to sample non-iid batches."
+            )
+        return np.array(eligible)
 
     def _sample_two(self, values: Iterable) -> Tuple[int, int]:
         choices = self.rng.choice(values, size=2, replace=False)
