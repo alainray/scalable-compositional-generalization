@@ -19,7 +19,7 @@ class BaseModel(torch.nn.Module):
 	def train_step(self,x,y,optimizer,amp_scaler=None,**kwargs):
 		optimizer.zero_grad()
 		if amp_scaler:
-			with torch.cuda.amp.autocast():yp=self(x);loss,attr_loss=self.loss_fn(yp,y);amp_scaler.scale(loss).backward();total_grad_norm=torch.nn.utils.clip_grad_norm_(self.parameters(),max_norm=1e3)
+			with torch.amp.autocast("cuda"):yp=self(x);loss,attr_loss=self.loss_fn(yp,y);amp_scaler.scale(loss).backward();total_grad_norm=torch.nn.utils.clip_grad_norm_(self.parameters(),max_norm=1e3)
 			if total_grad_norm.isfinite:amp_scaler.step(optimizer);amp_scaler.update()
 		else:yp=self(x);loss,attr_loss=self.loss(yp,y);loss.backward();total_grad_norm=torch.nn.utils.clip_grad_norm_(self.parameters(),max_norm=1e3);optimizer.step()
 		metrics,attr_metrics=self._compute_metrics(yp,y);return self._compose_logging_dict(loss,attr_loss,metrics,attr_metrics)
