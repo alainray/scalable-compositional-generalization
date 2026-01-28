@@ -13,10 +13,11 @@ from.ed import ExpDisentanglement
 from.preprocess import Augmentator,EdgeDetector,ShapeDetector
 from.resnet import ResNet18,ResNet34,ResNet50,ResNet101,ResNet152,WideResNet50
 from.ain import SplitResNet18
+from.resnet_mixer import ResNet18Mixer,RepresentationMixer
 from.vit import SwinTransformerBase,SwinTransformerTiny,ViT
 def get_model(cfg,*args,version=None,**kwargs):name=cfg.model.arch;model=_get_model_instance(name);model=model(**cfg);return model
 def _get_model_instance(name):
-	try:return{'mlp':get_mlp,'convnext_tiny':get_convnext,'convnext_small':get_convnext,'convnext_base':get_convnext,'convnext_large':get_convnext,'resnet18':get_resnet,'resnet34':get_resnet,'resnet50':get_resnet,'resnet101':get_resnet,'resnet152':get_resnet,'wideresnet':get_resnet,'resnet18_decoder':get_resnet,'densenet121':get_densenet,'densenet161':get_densenet,'densenet169':get_densenet,'densenet201':get_densenet,'vit':get_vit,'swin_base':get_swin,'swin_tiny':get_swin,'ed':get_neuro_sym,'split_resnet':get_split_resnet}[name]
+	try:return{'mlp':get_mlp,'convnext_tiny':get_convnext,'convnext_small':get_convnext,'convnext_base':get_convnext,'convnext_large':get_convnext,'resnet18':get_resnet,'resnet34':get_resnet,'resnet50':get_resnet,'resnet101':get_resnet,'resnet152':get_resnet,'wideresnet':get_resnet,'resnet18_decoder':get_resnet,'resnet18_mixer':get_resnet_mixer,'densenet121':get_densenet,'densenet161':get_densenet,'densenet169':get_densenet,'densenet201':get_densenet,'vit':get_vit,'swin_base':get_swin,'swin_tiny':get_swin,'ed':get_neuro_sym,'split_resnet':get_split_resnet}[name]
 	except ValueError as e:raise f"Unknown model {name}!"from e
 def _get_attribute_info(cfg):attributes=cfg['data']['training']['attributes'];targets=cfg['data']['training']['targets'].split('_');used_attributes=[attr for attr in attributes if attr['name']in targets];att_names=[n['name']for n in used_attributes];att_size=[n['out_dim']for n in used_attributes];att_var=[n['var']for n in used_attributes];return att_names,att_size,att_var
 def get_mlp(**cfg):
@@ -47,6 +48,17 @@ def get_resnet(**cfg):
 	elif objective=='regression':out_dim=len(attribute_names)
 	else:raise NotImplementedError(f"Objective {objective} is not supported.")
 	head=get_net(in_dim=emb_dim,out_dim=out_dim,arch='fc_vec',l_hidden=[],activation=[],out_activation=out_activation);return get_net(in_channels=in_chan,out_dim=emb_dim,preprocessing=preprocessing,head=head,attributes=attribute_names,attribute_sizes=attribute_sizes,objective=objective,loss_fn=loss,metric_fns=metrics,**model_cfg)
+def get_resnet_mixer(**cfg):
+	model_cfg=cfg['model'];in_chan=model_cfg['feature_extraction']['in_channels'];emb_dim=model_cfg['emb_dim'];out_activation=model_cfg['out_activation'];loss=get_loss(cfg['training']['loss']);objective=cfg['training']['objective'];metrics=get_metrics(cfg['training']['metrics']);attribute_names,attribute_sizes,_=_get_attribute_info(cfg);preprocessing=_get_preprocessing(model_cfg.pop('preprocessing'))
+	if objective=='classification':out_dim=sum(attribute_sizes)
+	elif objective=='regression':out_dim=len(attribute_names)
+	else:raise NotImplementedError(f"Objective {objective} is not supported.")
+	activation=get_activation(model_cfg['activation'])if 'activation'in model_cfg else None
+	encoder=ResNet18(pretrained=model_cfg['pretrained'],in_channels=in_chan,out_dim=emb_dim,preprocessing=None,head=None,objective=None,attribute_sizes=None,activation=activation,maxpool=model_cfg.get('maxpool',1))
+	mixer_cfg=model_cfg.get('mixer',{})
+	mixer=RepresentationMixer(emb_dim=emb_dim,num_layers=mixer_cfg.get('num_layers',2),num_heads=mixer_cfg.get('num_heads',4),dropout=mixer_cfg.get('dropout',0.0))
+	classifier=get_net(in_dim=emb_dim,out_dim=out_dim,arch='fc_vec',l_hidden=[],activation=[],out_activation=out_activation)
+	return ResNet18Mixer(encoder=encoder,mixer=mixer,classifier=classifier,preprocessing=preprocessing,attributes=attribute_names,attribute_sizes=attribute_sizes,objective=objective,loss_fn=loss,metric_fns=metrics,mixer_loss_weight=mixer_cfg.get('loss_weight',1.0),mixer_detach_target=mixer_cfg.get('detach_target',False),use_mixer_classifier=mixer_cfg.get('use_classifier',False))
 def get_neuro_sym(**cfg):
 	model_cfg=cfg['model'];arch=model_cfg['arch'];model_cfg['feature_extraction']['in_channels'];z_dim=model_cfg['z_dim'];cb_path=os.path.join(model_cfg['path'],'codebooks');att_names,att_size,att_var=_get_attribute_info(cfg);preprocessing=_get_preprocessing(model_cfg.pop('preprocessing'));loss=get_loss(cfg['training']['loss']);objective=cfg['training']['objective'];metrics=get_metrics(cfg['training']['metrics'])
 	if arch!='ed':raise ValueError(f"Architecture {arch} not supported")

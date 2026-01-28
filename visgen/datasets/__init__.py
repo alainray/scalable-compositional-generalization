@@ -71,12 +71,17 @@ def _filter_allowed_attributes(dataset, allowed_attributes):
 	return eligible
 
 
-def _wrap_non_iid(dataset, cfg):
+def _wrap_non_iid(dataset, cfg, split_name=None):
 	non_iid_cfg = _resolve_non_iid_cfg(cfg)
 	if not non_iid_cfg:
 		return dataset
 	if isinstance(non_iid_cfg, str):
 		non_iid_cfg = {}
+	apply_to = non_iid_cfg.get("apply_to")
+	if apply_to and split_name not in apply_to:
+		return dataset
+	if split_name is None:
+		return dataset
 	allowed_attributes = non_iid_cfg.get("allowed_attributes")
 	if not allowed_attributes:
 		allowed_attributes = _config_attribute_names(cfg)
@@ -159,13 +164,22 @@ def get_dataloaders(data_cfg, writer=None):
 			]
 		else:
 			datasets = [(key, data)]
+		non_iid_cfg = _resolve_non_iid_cfg(cfg)
+		apply_to = None
+		if non_iid_cfg and not isinstance(non_iid_cfg, str):
+			apply_to = non_iid_cfg.get("apply_to")
+		if apply_to:
+			if cfg.train and "validation" in apply_to:
+				datasets.append(("validation_raw", val_data))
+			if (not cfg.train) and "testing" in apply_to:
+				datasets.append(("testing_raw", data))
 		infos = {}
 		if hasattr(data, "actual_difficulty"):
 			infos[f"{key}_actual_difficulty"] = data.actual_difficulty
 			infos[f"{key}_volume"] = data.volume
 		writer.write(infos)
 		for (name, data) in datasets:
-			data = _wrap_non_iid(data, cfg)
+			data = _wrap_non_iid(data, cfg, name)
 			loader = DataLoader(
 				data,
 				batch_size=cfg.batch_size,
