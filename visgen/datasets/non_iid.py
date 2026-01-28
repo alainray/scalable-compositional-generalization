@@ -130,9 +130,14 @@ class NonIIDWrapper(Dataset):
                 )
             return np.array(eligible)
         base_dataset, _ = self._unwrap_subset(self.dataset)
-        resolved = [
-            base_dataset._attribute_to_index(attr) for attr in allowed_attributes
-        ]
+        resolved = []
+        for attr in allowed_attributes:
+            idx = base_dataset._attribute_to_index(attr)
+            if hasattr(base_dataset, "_target_index_map"):
+                idx = base_dataset._target_index_map.get(idx)
+                if idx is None:
+                    continue
+            resolved.append(idx)
         eligible = [
             idx
             for idx in resolved

@@ -54,6 +54,9 @@ class BaseDataset(Dataset, ABC):
         if targets is not None:
             target_indices = [self._attribute_to_index(target) for target in targets]
             target_indices.sort()
+            self._target_index_map = {
+                orig_idx: new_idx for new_idx, orig_idx in enumerate(target_indices)
+            }
             self._split_attribute_indices = []
             num_attributes = self._dataset_targets.shape[-1]
             excluded_indices = [
