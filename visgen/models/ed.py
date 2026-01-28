@@ -38,18 +38,18 @@ class ExpDisentanglement(BaseModel):
     def plot_debug(self, x, path, **kwargs):
         self.train()
         original = plot_box(
-            img=x[22].permute(1, 2, 0).cpu().numpy(),
+            img=self._debug_image(x),
             path=os.path.join(path, "original.png"),
         )
         x_train = self.preprocessing(x)
         train_augm = plot_box(
-            img=x_train[22].permute(1, 2, 0).cpu().numpy(),
+            img=self._debug_image(x_train),
             path=os.path.join(path, "train_augm.png"),
         )
         self.eval()
         x_test = self.preprocessing(x)
         test_augm = plot_box(
-            img=x_test[22].permute(1, 2, 0).cpu().numpy(),
+            img=self._debug_image(x_test),
             path=os.path.join(path, "test_augm.png"),
         )
         # plot codebook similarities
@@ -71,4 +71,3 @@ class ExpDisentanglement(BaseModel):
                 "train_augm",
                 "test_augm",
             ]
-
