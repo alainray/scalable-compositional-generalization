@@ -35,6 +35,15 @@ class BaseTrainer:
         ood_val_loaders = [
             d_dataloaders[f"ood_validation_{i}"] for i in range(num_ood_sets)
         ]
+        extra_eval_loaders = []
+        if "validation_raw" in d_dataloaders:
+            extra_eval_loaders.append(
+                ("validation_raw", d_dataloaders["validation_raw"])
+            )
+        if "testing_raw" in d_dataloaders:
+            extra_eval_loaders.append(
+                ("testing_raw", d_dataloaders["testing_raw"])
+            )
         kwargs = {"dataset_size": len(train_loader.dataset)}
         selection_metric = self.cfg.selection_metric
         best_val_metric = -np.inf if "acc" in selection_metric else np.inf
@@ -94,9 +103,11 @@ class BaseTrainer:
         # TRAINING LOOP
         for i_epoch in range(start_epoch, self.cfg["n_epoch"] + 1):
             ams = {}
-            for split in ["train", "val", "test"] + [
+            splits = ["train", "val", "test"] + [
                 f"ood_val_{i}" for i in range(num_ood_sets)
-            ]:
+            ]
+            splits += [name for name, _ in extra_eval_loaders]
+            for split in splits:
                 ams |= {f"{split}_{m}": AverageMeter(m) for m in metrics}
             start = time.time()
 
@@ -122,6 +133,7 @@ class BaseTrainer:
             loaders += [
                 (f"ood_val_{i}", loader) for i, loader in enumerate(ood_val_loaders)
             ]
+            loaders += extra_eval_loaders
             for name, loader in loaders:
                 for x, y in tqdm(loader, disable=not self.cfg["verbose"]):
                     d_val = model.validation_step(
@@ -240,4 +252,3 @@ class MultiStepTrainer:
             results = results | best_ams
             model.next_step()
         return model, results
-
