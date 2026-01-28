@@ -64,6 +64,14 @@ def _filter_allowed_attributes(dataset, allowed_attributes):
 		except Exception:
 			unknown.append(attr)
 			continue
+		if hasattr(base_dataset, "_target_index_map"):
+			idx = base_dataset._target_index_map.get(idx)
+			if idx is None:
+				unknown.append(attr)
+				continue
+		if idx >= len(attribute_values):
+			unknown.append(attr)
+			continue
 		if len(attribute_values[idx]) < 2:
 			filtered.append(attr)
 			continue
