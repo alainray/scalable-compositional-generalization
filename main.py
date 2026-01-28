@@ -122,13 +122,19 @@ if __name__ == "__main__":
 
     # compose the full save path
     model_groupby = cfg.data.training.targets
+    split_value = cfg.data.training.get("c")
+    if split_value is None:
+        split_value = cfg.data.training.get("split_difficulty")
+    split_label = (
+        f"{cfg.data.training.split}_{str(split_value)}"
+        if split_value is not None
+        else cfg.data.training.split
+    )
     cfg.model.path = cfg.path.full = os.path.join(
         cfg.path.base,
         run_name,
         cfg.data.training.dataset,
-        # f"{cfg.data.training.split}_{str(cfg.data.training.split_difficulty)}",
-        f"{cfg.data.training.split}_{str(cfg.data.training.c)}",
-        # cfg.data.training.split,
+        split_label,
         model_name,
         model_groupby,
         str(cfg.seed),
