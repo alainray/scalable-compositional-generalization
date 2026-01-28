@@ -30,11 +30,14 @@ class BaseTrainer:
             d_dataloaders["validation"],
             d_dataloaders["testing"],
         )
-        # subtract 3 (train, val, test) to get the number of OOD validation sets
-        num_ood_sets = len(d_dataloaders) - 3
-        ood_val_loaders = [
-            d_dataloaders[f"ood_validation_{i}"] for i in range(num_ood_sets)
+        ood_val_keys = [
+            key for key in d_dataloaders.keys() if key.startswith("ood_validation_")
         ]
+        ood_val_keys = sorted(
+            ood_val_keys, key=lambda key: int(key.split("ood_validation_")[1])
+        )
+        num_ood_sets = len(ood_val_keys)
+        ood_val_loaders = [d_dataloaders[key] for key in ood_val_keys]
         extra_eval_loaders = []
         if "validation_raw" in d_dataloaders:
             extra_eval_loaders.append(
