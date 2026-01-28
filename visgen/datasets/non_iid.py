@@ -37,6 +37,18 @@ class NonIIDWrapper(Dataset):
             allowed_attributes
         )
 
+    @staticmethod
+    def _unwrap_subset(dataset: Dataset) -> Tuple[Dataset, Optional[np.ndarray]]:
+        base_dataset = dataset
+        indices = None
+        while isinstance(base_dataset, Subset):
+            if indices is None:
+                indices = np.asarray(base_dataset.indices)
+            else:
+                indices = np.asarray(base_dataset.indices)[indices]
+            base_dataset = base_dataset.dataset
+        return base_dataset, indices
+
     def __len__(self) -> int:
         return len(self.dataset)
 
@@ -70,9 +82,9 @@ class NonIIDWrapper(Dataset):
         )
 
     def _prepare_targets(self, dataset: Dataset) -> Tuple[np.ndarray, List[List]]:
-        base_dataset = dataset.dataset if isinstance(dataset, Subset) else dataset
-        if isinstance(dataset, Subset):
-            targets = base_dataset._dataset_targets[dataset.indices]
+        base_dataset, indices = self._unwrap_subset(dataset)
+        if indices is not None:
+            targets = base_dataset._dataset_targets[indices]
         else:
             targets = base_dataset._dataset_targets
         if targets.ndim == 3:
@@ -115,9 +127,7 @@ class NonIIDWrapper(Dataset):
                     "distinct values to sample non-iid batches."
                 )
             return np.array(eligible)
-        base_dataset = (
-            self.dataset.dataset if isinstance(self.dataset, Subset) else self.dataset
-        )
+        base_dataset, _ = self._unwrap_subset(self.dataset)
         resolved = [
             base_dataset._attribute_to_index(attr) for attr in allowed_attributes
         ]

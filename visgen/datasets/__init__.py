@@ -40,10 +40,17 @@ def _config_attribute_names(cfg):
 	return None
 
 
+def _unwrap_subset(dataset):
+	base_dataset = dataset
+	while isinstance(base_dataset, Subset):
+		base_dataset = base_dataset.dataset
+	return base_dataset
+
+
 def _filter_allowed_attributes(dataset, allowed_attributes):
 	if not allowed_attributes:
 		return allowed_attributes
-	base_dataset = dataset.dataset if isinstance(dataset, Subset) else dataset
+	base_dataset = _unwrap_subset(dataset)
 	if getattr(base_dataset, "_attribute_values", None) is None:
 		attribute_values = base_dataset._get_attribute_values()
 	else:
@@ -114,7 +121,7 @@ def _attribute_names(base_dataset, cfg=None):
 
 
 def _log_attribute_values(dataset, writer, name, cfg=None):
-	base_dataset = dataset.dataset if isinstance(dataset, Subset) else dataset
+	base_dataset = _unwrap_subset(dataset)
 	if getattr(base_dataset, "_attribute_values", None) is None:
 		attribute_values = base_dataset._get_attribute_values()
 	else:
