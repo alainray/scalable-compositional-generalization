@@ -43,6 +43,7 @@ else
     exit 1
 fi
 
+split=general_composition
 data_cfg="configs/datasets/${dataset}_non_iid.yml"
 model_cfg="configs/models/${model}.yml"
 
@@ -52,6 +53,7 @@ for c in "${C[@]}"; do
         python main.py --experiment-cfg "configs/experiments/${experiment}.yml" \
         --data-cfg "$data_cfg" --model-cfg "$model_cfg" \
         data.training.targets=$split_attributes data.training.split_attributes=$split_attributes \
+        data.training.split=$split data.testing.split=$split \
         data.training.c=$c data.testing.c=$c \
         data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty \
         --seed=$seed data.training.num_workers=0 data.testing.num_workers=0 logger.name=wandb
