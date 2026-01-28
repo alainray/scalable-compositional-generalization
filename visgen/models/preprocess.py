@@ -14,7 +14,14 @@ class EdgeDetector(torch.nn.Module):
 class Augmentator(nn.Module):
 	def __init__(self,train_augm,test_augm,*args,**kwargs)->None:super().__init__(*args,**kwargs);self.train_augm=self._init(train_augm);self.test_augm=self._init(test_augm)
 	@torch.no_grad()
-	def forward(self,x):augm=self.train_augm if self.training else self.test_augm;return augm(x)
+	def forward(self,x):
+		augm=self.train_augm if self.training else self.test_augm
+		if x.dim()==5:
+			batch,group,channels,height,width=x.shape
+			x=x.view(batch*group,channels,height,width)
+			x=augm(x)
+			return x.view(batch,group,*x.shape[1:])
+		return augm(x)
 	def _init(self,augms):
 		tr=[]
 		for augm in augms:
