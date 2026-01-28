@@ -17,7 +17,9 @@ class NonIIDWrapper(Dataset):
     Notes:
         This wrapper assumes each sample has a single object (i.e., targets
         are shaped as (N, 1, num_attributes) or (N, num_attributes)).
+        __len__ reports the number of 4-sample groups to align epoch lengths.
     """
+    group_size = 4
 
     def __init__(
         self,
@@ -50,7 +52,7 @@ class NonIIDWrapper(Dataset):
         return base_dataset, indices
 
     def __len__(self) -> int:
-        return len(self.dataset)
+        return len(self.dataset) // self.group_size
 
     def __getitem__(self, index: int):
         del index
