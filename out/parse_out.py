@@ -25,6 +25,23 @@ METRICS = [
 PARSE_LOG = True
 
 
+def find_wandb_log_path(path):
+    latest_run = os.path.join(path, "wandb", "latest-run", "files", "output.log")
+    if os.path.exists(latest_run):
+        return latest_run
+    wandb_root = os.path.join(path, "wandb")
+    if not os.path.isdir(wandb_root):
+        return None
+    run_dirs = sorted(
+        [entry.path for entry in os.scandir(wandb_root) if entry.is_dir()]
+    )
+    for run_dir in reversed(run_dirs):
+        candidate = os.path.join(run_dir, "files", "output.log")
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def select_best(train_data):
     def wio_metric(id_val, ood_val, test, l):
         return id_val + (ood_val - 100)/l
@@ -58,7 +75,11 @@ def select_best(train_data):
 
 
 def parse_training_metrics(path):
-    log_path = os.path.join(path, "wandb/latest-run/files/output.log")
+    log_path = find_wandb_log_path(path)
+    if log_path is None:
+        raise FileNotFoundError(
+            f"No output.log found under {os.path.join(path, 'wandb')}"
+        )
     with open(log_path, "r") as file:
         log_data = file.read()
     epoch_data = {}
@@ -121,7 +142,11 @@ def select_best_id(train_data):
     return bests
 
 def parse_id(path):
-    log_path = os.path.join(path, "wandb/latest-run/files/output.log")
+    log_path = find_wandb_log_path(path)
+    if log_path is None:
+        raise FileNotFoundError(
+            f"No output.log found under {os.path.join(path, 'wandb')}"
+        )
     with open(log_path, "r") as file:
         log_data = file.read()
     epoch_data = {}
@@ -256,6 +281,10 @@ ARCHS = [
 def check_arch_counts(df, max_c):
     print("\nArchitecture check")
     print("=" * 60)
+    if df.empty or not {"arch", "c", "seed"}.issubset(df.columns):
+        print("❌ No parsed runs found; skipping architecture count checks.")
+        print("=" * 60)
+        return
     arch_counts = df['arch'].value_counts()
     all_ok = True
     exp_runs = 3 * (max_c+1)
