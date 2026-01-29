@@ -70,7 +70,8 @@ for c in "${C[@]}"; do
             --data-cfg configs/datasets/${dataset}.yml --model-cfg configs/models/${model}.yml \
             data.training.targets=$split_attributes data.training.split_attributes=$split_attributes \
             data.training.split=$split --seed=$seed  data.training.c=$c data.testing.c=$c logger.name=base \
-            data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty data.training.num_workers=0 data.testing.num_workers=0
+            data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty data.training.num_workers=0 data.testing.num_workers=0 \
+            logger.name=wandb
         done
     done
 done
