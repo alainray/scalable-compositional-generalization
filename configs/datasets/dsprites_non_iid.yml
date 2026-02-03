@@ -14,7 +14,7 @@ data:
     num_workers: 1
     non_iid:
       name: non_iid
-      apply_to: ["training", "validation"]
+      apply_to: ["training"]
     attributes: &ATT
       - name: shape
         out_dim: 3

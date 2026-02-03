@@ -49,7 +49,7 @@ model_cfg="configs/models/${model}.yml"
 
 for c in "${C[@]}"; do
     for seed in "${SEEDS[@]}"; do
-        difficulty=${D[$c]}
+        difficulty=${D[0]}
         python main.py --experiment-cfg "configs/experiments/${experiment}.yml" \
         --data-cfg "$data_cfg" --model-cfg "$model_cfg" \
         data.training.targets=$split_attributes data.training.split_attributes=$split_attributes \
