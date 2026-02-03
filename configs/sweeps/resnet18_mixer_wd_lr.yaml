@@ -1,0 +1,25 @@
+project: visgen
+method: bayes
+metric:
+  name: val/acc
+  goal: maximize
+parameters:
+  training.optimizer.lr:
+    min: 1.0e-5
+    max: 5.0e-4
+  training.optimizer.weight_decay:
+    values: [0.0, 1.0e-6, 1.0e-5, 1.0e-4]
+  model.mixer.loss_weight:
+    values: [0.1, 0.3, 0.5, 1.0, 2.0]
+
+command:
+  - ${env}
+  - python
+  - main.py
+  - --sweep
+  - --experiment-cfg
+  - configs/experiments/orthotopic.yml
+  - --data-cfg
+  - configs/datasets/iraven.yml
+  - --model-cfg
+  - configs/models/resnet18_mixer.yml
