@@ -62,9 +62,10 @@ class BaseTrainer:
 
         # init varia
         metrics = model.get_logged_metrics()
-        amp_scaler = (
-            torch.amp.GradScaler("cuda") if self.cfg.get("fp-16", False) else None
+        amp_enabled = self.cfg.get("fp-16", False) and not getattr(
+            model, "disable_amp", False
         )
+        amp_scaler = torch.amp.GradScaler("cuda") if amp_enabled else None
 
         # CHECKPOINTING
         # handle training re-start or continuation
@@ -140,7 +141,9 @@ class BaseTrainer:
             for name, loader in loaders:
                 for x, y in tqdm(loader, disable=not self.cfg["verbose"]):
                     d_val = model.validation_step(
-                        x=x.to(self.device), y=y.to(self.device)
+                        x=x.to(self.device),
+                        y=y.to(self.device),
+                        amp_scaler=amp_scaler,
                     )
                     for k, v in d_val.items():
                         ams[f"{name}_{k}"].update(v)
