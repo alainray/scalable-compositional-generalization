@@ -1,7 +1,7 @@
 project: visgen
 method: bayes
 metric:
-  name: val/acc
+  name: test/acc
   goal: maximize
 parameters:
   training.optimizer.lr:
@@ -14,12 +14,8 @@ parameters:
 
 command:
   - ${env}
-  - python
-  - main.py
-  - --sweep
-  - --experiment-cfg
-  - configs/experiments/orthotopic.yml
-  - --data-cfg
-  - configs/datasets/iraven.yml
-  - --model-cfg
-  - configs/models/resnet18_mixer.yml
+  - bash
+  - mixer_sweep_runner.sh
+  - iraven
+  - orthotopic
+  - sweep
