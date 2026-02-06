@@ -123,20 +123,13 @@ class SplitResNet18(ResNet):
         if self.preprocessing is not None:
             with torch.no_grad():
                 x = self.preprocessing(x)
-        x = x.contiguous(memory_format=torch.contiguous_format)
+        x = x.contiguous().clone()
 
         h = []
         for split_block in self.split_block:
-            split_input = x.clone()
-            h.append(
-                split_block(split_input).contiguous(
-                    memory_format=torch.contiguous_format
-                )
-            )
+            h.append(split_block(x).contiguous().clone())
         
-        h = torch.cat(h, dim=0).contiguous(
-            memory_format=torch.contiguous_format
-        )
+        h = torch.cat(h, dim=0).contiguous().clone()
         x = self.shared_blocks(h)
         x = torch.flatten(x, 1)
         
