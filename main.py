@@ -165,9 +165,25 @@ if __name__ == "__main__":
         if device_ids is None:
             device_ids = list(range(torch.cuda.device_count()))
         else:
+            if isinstance(device_ids, str):
+                import ast
+
+                try:
+                    device_ids = ast.literal_eval(device_ids)
+                except (SyntaxError, ValueError):
+                    device_ids = [device_ids]
+            if isinstance(device_ids, int):
+                device_ids = [device_ids]
             device_ids = list(device_ids)
-        cfg["device"] = f"cuda:{device_ids[0]}"
-        model = wrap_model_for_dataparallel(model, device_ids=device_ids)
+        device_ids = [int(d) for d in device_ids if str(d).isdigit()]
+        device_ids = [d for d in device_ids if 0 <= d < torch.cuda.device_count()]
+        if len(device_ids) > 1:
+            primary_device = device_ids[0]
+            torch.cuda.set_device(primary_device)
+            cfg["device"] = f"cuda:{primary_device}"
+            model = wrap_model_for_dataparallel(model, device_ids=device_ids)
+        else:
+            cfg["device"] = f"cuda:{device_ids[0]}" if device_ids else "cuda"
     model = model.to(cfg.device)
 
     # setup trainer
