@@ -12,6 +12,7 @@ from visgen.utils.general import (compare_cfgs, fix_random,
                                   get_logger, register_resolvers,
                                   save_yaml_safe)
 from visgen.utils.general.general import get_lsf_info
+from visgen.utils.general.parallel import wrap_model_for_dataparallel
 
 
 def parse_args():
@@ -157,7 +158,19 @@ if __name__ == "__main__":
     d_dataloaders = get_dataloaders(cfg.data, writer)
 
     # build model
-    model = get_model(cfg).to(cfg.device)
+    model = get_model(cfg)
+    use_multi_gpu = cfg.training.get("multi_gpu", False)
+    if use_multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        device_ids = cfg.training.get("multi_gpu_ids")
+        if device_ids is None:
+            device_ids = list(range(torch.cuda.device_count()))
+        else:
+            device_ids = list(device_ids)
+        primary_device = device_ids[0]
+        torch.cuda.set_device(primary_device)
+        cfg["device"] = f"cuda:{primary_device}"
+        model = wrap_model_for_dataparallel(model, device_ids=device_ids)
+    model = model.to(cfg.device)
 
     # setup trainer
     trainer = get_trainer(cfg)
