@@ -11,6 +11,8 @@ class SplitResNet18(ResNet):
         exit_reg=10,
         **kwargs,
     ):
+        if "activation" not in kwargs:
+            kwargs["activation"] = nn.ReLU(inplace=False)
         super().__init__(
             block=BasicBlock,
             layers=[2, 2, 2, 2],
@@ -121,12 +123,20 @@ class SplitResNet18(ResNet):
         if self.preprocessing is not None:
             with torch.no_grad():
                 x = self.preprocessing(x)
+        x = x.contiguous(memory_format=torch.contiguous_format)
 
         h = []
         for split_block in self.split_block:
-            h.append(split_block(x))
+            split_input = x.clone()
+            h.append(
+                split_block(split_input).contiguous(
+                    memory_format=torch.contiguous_format
+                )
+            )
         
-        h = torch.cat(h, axis=0).contiguous()
+        h = torch.cat(h, dim=0).contiguous(
+            memory_format=torch.contiguous_format
+        )
         x = self.shared_blocks(h)
         x = torch.flatten(x, 1)
         
