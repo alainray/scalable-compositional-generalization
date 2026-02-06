@@ -126,12 +126,12 @@ class SplitResNet18(ResNet):
         for split_block in self.split_block:
             h.append(split_block(x))
         
-        h = torch.cat(h, axis=0)
+        h = torch.cat(h, axis=0).contiguous()
         x = self.shared_blocks(h)
         x = torch.flatten(x, 1)
         
         # early exit embeddings
-        h = self.exit_avgpool(h)
+        h = self.exit_avgpool(h).contiguous()
         h = torch.flatten(h, 1)
 
         if self.objective == "classification":
