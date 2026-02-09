@@ -13,7 +13,6 @@ class Bottleneck(nn.Module):
 		if norm_layer is None:norm_layer=nn.BatchNorm2d
 		width=int(planes*(base_width/64.))*groups;self.conv1=conv1x1(inplanes,width);self.bn1=norm_layer(width);self.conv2=conv3x3(width,width,stride,groups,dilation);self.bn2=norm_layer(width);self.conv3=conv1x1(width,planes*self.expansion);self.bn3=norm_layer(planes*self.expansion);self.activation=activation;self.downsample=downsample;self.stride=stride
 	def forward(self,x):
-		x=x.contiguous()
 		identity=x;out=self.conv1(x);out=self.bn1(out);out=self.activation(out);out=self.conv2(out);out=self.bn2(out);out=self.activation(out);out=self.conv3(out);out=self.bn3(out)
 		if self.downsample is not None:identity=self.downsample(x)
 		out+=identity;out=self.activation(out);return out
@@ -26,7 +25,6 @@ class BasicBlock(nn.Module):
 		if dilation>1:raise NotImplementedError('Dilation > 1 not supported in BasicBlock')
 		self.conv1=conv3x3(inplanes,planes,stride);self.bn1=norm_layer(planes);self.activation=activation;self.conv2=conv3x3(planes,planes);self.bn2=norm_layer(planes);self.downsample=downsample;self.stride=stride
 	def forward(self,x):
-		x=x.contiguous()
 		identity=x;out=self.conv1(x);out=self.bn1(out);out=self.activation(out);out=self.conv2(out);out=self.bn2(out)
 		if self.downsample is not None:identity=self.downsample(x)
 		out+=identity;out=self.activation(out);return out
@@ -39,7 +37,6 @@ class BasicISOBlock(BasicBlock):
 		if relu_parameter is None:relu_parameter=-1
 		self.relu1=SReLU(inplanes,relu_parameter=relu_parameter);self.relu2=SReLU(planes,relu_parameter=relu_parameter);self.alpha=torch.nn.parameter.Parameter(data=torch.tensor(.0),requires_grad=True);self.skip_init=skip_init
 	def forward(self,x:torch.Tensor)->torch.Tensor:
-		x=x.contiguous()
 		identity=x;out=self.conv1(x);out=self.bn1(out);out=self.activation(out);out=self.conv2(out);out=self.bn2(out)
 		if self.downsample is not None:identity=self.downsample(x)
 		out=self.alpha*out+identity if self.skip_init else out+identity;out+=identity;out=self.activation(out);return out
@@ -49,7 +46,6 @@ class AdjustedISOBlock(BasicBlock):
 		if relu_parameter is None:relu_parameter=.5
 		self.relu1=nn.PReLU(num_parameters=inplanes,init=relu_parameter);self.relu2=nn.PReLU(num_parameters=planes,init=relu_parameter);self.alpha=torch.nn.parameter.Parameter(data=torch.tensor(.0),requires_grad=True);self.skip_init=skip_init
 	def forward(self,x:torch.Tensor)->torch.Tensor:
-		x=x.contiguous()
 		identity=x;out=self.conv1(x);out=self.bn1(out);out=self.relu2(out);out=self.conv2(out);out=self.bn2(out)
 		if self.downsample is not None:identity=self.downsample(x)
 		out=self.alpha*out+identity if self.skip_init else out+identity;out=self.relu2(out);return out
@@ -59,7 +55,6 @@ class ISOBottleneck(Bottleneck):
 		if relu_parameter is None:relu_parameter=.5
 		self.relu1=nn.PReLU(num_parameters=planes,init=relu_parameter);self.relu2=nn.PReLU(num_parameters=planes*self.expansion,init=relu_parameter);self.alpha=torch.nn.parameter.Parameter(data=torch.tensor(.0),requires_grad=True);self.skip_init=skip_init
 	def forward(self,x):
-		x=x.contiguous()
 		identity=x;out=self.conv1(x);out=self.bn1(out);out=self.relu1(out);out=self.conv2(out);out=self.bn2(out);out=self.relu1(out);out=self.conv3(out);out=self.bn3(out)
 		if self.downsample is not None:identity=self.downsample(x)
 		if self.skip_init:out=self.alpha*out+identity
@@ -98,7 +93,6 @@ class ResNet(BaseModel):
 	def forward(self,x):
 		if self.preprocessing is not None:
 			with torch.no_grad():x=self.preprocessing(x)
-		x=x.contiguous()
 		x=self.conv1(x);x=self.bn1(x);x=self.activation(x);x=self.maxpool(x);x=self.layer1(x);x=self.layer2(x);x=self.layer3(x);x=self.layer4(x);x=self.avgpool(x);x=torch.flatten(x,1)
 		if hasattr(self,'fc')and self.fc:x=self.fc(x)
 		if self.head is not None:x=self.head(x)
