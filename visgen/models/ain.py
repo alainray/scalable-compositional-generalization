@@ -9,7 +9,6 @@ class SplitResNet18(ResNet):
         self,
         split_layers=1,
         exit_reg=10,
-        disable_amp=True,
         **kwargs,
     ):
         super().__init__(
@@ -24,7 +23,6 @@ class SplitResNet18(ResNet):
 
         self.split_layers = split_layers
         self.exit_reg = exit_reg
-        self.disable_amp = disable_amp
         self.layer_planes = [2**i for i in range(6, 10)]
         self.exit_head_emb_size = [2**i for i in range(14, 9, -1)]
 
@@ -173,7 +171,7 @@ class SplitResNet18(ResNet):
         # train step
         optimizer.zero_grad()
         if amp_scaler:
-            with torch.amp.autocast("cuda"):
+            with torch.cuda.amp.autocast():
                 yp, yhp = self(x, 'train')
                 # main loss
                 yloss, attr_loss = self.loss_fn(yp, y)

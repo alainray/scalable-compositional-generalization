@@ -83,14 +83,9 @@ class BaseModel(torch.nn.Module):
         return self._compose_logging_dict(loss, attr_loss, metrics, attr_metrics)
 
     @torch.no_grad()
-    def validation_step(self, x, y=None, amp_scaler=None, **kwargs):
-        if amp_scaler:
-            with torch.amp.autocast("cuda"):
-                yp = self(x)
-                loss, attr_loss = self.loss_fn(yp, y)
-        else:
-            yp = self(x)
-            loss, attr_loss = self.loss_fn(yp, y)
+    def validation_step(self, x, y=None, **kwargs):
+        yp = self(x)
+        loss, attr_loss = self.loss_fn(yp, y)
         metrics, attr_metrics = self._compute_metrics(yp, y)
         return self._compose_logging_dict(loss, attr_loss, metrics, attr_metrics)
 
