@@ -26,14 +26,8 @@ class SplitResNet18(ResNet):
         self.layer_planes = [2**i for i in range(6, 10)]
         self.exit_head_emb_size = [2**i for i in range(14, 9, -1)]
 
-        base_inplanes = self.inplanes
-        base_dilation = self.dilation
-        shared_inplanes = None
-        shared_dilation = None
         split_blocks = []
         for _ in self.attribute_sizes:
-            self.inplanes = base_inplanes
-            self.dilation = base_dilation
             if self.maxpool == 0:
                 conv1 = nn.Conv2d(
                     self.in_channels,
@@ -81,10 +75,6 @@ class SplitResNet18(ResNet):
 
             if self.split_layers == 4:
                 split_block.append(nn.AdaptiveAvgPool2d((1, 1)))
-
-            if shared_inplanes is None:
-                shared_inplanes = self.inplanes
-                shared_dilation = self.dilation
             
             split_blocks.append(nn.Sequential(*split_block))
             
@@ -92,10 +82,6 @@ class SplitResNet18(ResNet):
         self.exit_head = nn.Linear(self.exit_head_emb_size[self.split_layers], sum(self.attribute_sizes))
         self.exit_avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        if shared_inplanes is not None:
-            self.inplanes = shared_inplanes
-        if shared_dilation is not None:
-            self.dilation = shared_dilation
         shared_blocks = []
         for i in range(self.split_layers, 4):
             print(i, self.layer_planes[i], self.layers[i])
