@@ -11,8 +11,8 @@
 #SBATCH --gres=gpu:4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=60G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=80G
 
 set -euo pipefail
 
@@ -32,7 +32,7 @@ cd /workspace1/asoto/araymond/scalable-compositional-generalization
 
 # Launch one agent per GPU. Slurm assigns GPUs to each srun.
 for _ in $(seq 1 4); do
-  srun --exclusive --gres=gpu:1 --cpus-per-task=8 --mem=15G \
+  srun --exclusive --gres=gpu:1 --cpus-per-task=8 --mem=20G \
     wandb agent "${SWEEP_ID}" "$@" &
 done
 
