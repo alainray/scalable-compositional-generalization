@@ -9,8 +9,6 @@ logger:
 training:
   trainer: base
   fp-16: True
-  multi_gpu: False
-  multi_gpu_ids: null
   n_epoch: 100
   log_steps: 10
   optimizer:

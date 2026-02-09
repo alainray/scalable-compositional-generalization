@@ -13,14 +13,6 @@ def save_checkpoint(model,epoch,is_best,savepath,best_ams,optimizer=None,filenam
 	path=os.path.join(savepath,filename);path_best=os.path.join(savepath,'model_best.pth.tar');torch.save({'epoch':epoch,'model_state_dict':model.state_dict(),'optimizer_state_dict':optimizer.state_dict()if optimizer else None,'best_ams':best_ams},path)
 	if is_best:shutil.copy(path,path_best)
 def load_checkpoint(path,model,optimizer=None,device='cpu'):
-	ckpt=torch.load(path,map_location=device);state_dict=ckpt['model_state_dict'];model_state=model.state_dict()
-	if state_dict and model_state:
-		state_has_module=next(iter(state_dict)).startswith('module.')
-		model_has_module=next(iter(model_state)).startswith('module.')
-		if state_has_module and not model_has_module:
-			state_dict={k.replace('module.','',1):v for k,v in state_dict.items()}
-		elif model_has_module and not state_has_module:
-			state_dict={f'module.{k}':v for k,v in state_dict.items()}
-	model.load_state_dict(state_dict)
+	ckpt=torch.load(path,map_location=device);model.load_state_dict(ckpt['model_state_dict'])
 	if'optimizer_state_dict'in ckpt and optimizer:optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 	epoch=ckpt['epoch'];best_ams=ckpt['best_ams'];return model,best_ams,epoch,optimizer
