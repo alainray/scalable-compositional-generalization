@@ -2,6 +2,7 @@ import torch
 from torch import nn
 
 from .resnet import ResNet, BasicBlock
+from .resnet_mixer import RepresentationMixer
 
 
 class SplitResNet18(ResNet):
@@ -184,3 +185,132 @@ class SplitResNet18(ResNet):
         # compose log dictionary
         dlog = self._compose_logging_dict(loss, attr_loss, metrics, attr_metrics)
         return dlog
+
+
+class SplitResNet18Mixer(SplitResNet18):
+    def __init__(
+        self,
+        mixer_num_layers=2,
+        mixer_num_heads=4,
+        mixer_dropout=0.0,
+        mixer_loss_weight=1.0,
+        mixer_detach_target=False,
+        use_mixer_classifier=False,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        rep_dim = self.out_dim * len(self.attribute_sizes)
+        self.mixer = RepresentationMixer(
+            emb_dim=rep_dim,
+            num_layers=mixer_num_layers,
+            num_heads=mixer_num_heads,
+            dropout=mixer_dropout,
+        )
+        self.mixer_loss_fn = nn.MSELoss()
+        self.mixer_loss_weight = mixer_loss_weight
+        self.mixer_detach_target = mixer_detach_target
+        self.use_mixer_classifier = use_mixer_classifier
+        self._logged_metrics = self._logged_metrics + ["mixer_loss", "total_loss"]
+
+    def _encode_split(self, x):
+        if self.preprocessing is not None:
+            with torch.no_grad():
+                x = self.preprocessing(x)
+
+        h = []
+        for split_block in self.split_block:
+            h.append(split_block(x))
+
+        h = torch.cat(h, axis=0)
+        x = self.shared_blocks(h)
+        x = torch.flatten(x, 1)
+
+        x_split = torch.split(x, x.shape[0] // len(self.attribute_sizes), dim=0)
+        rep = torch.cat(x_split, dim=1)
+        return x_split, rep
+
+    def _split_logits(self, x_split):
+        logits = []
+        j = 0
+        for i, n in enumerate(self.attribute_sizes):
+            logits.append(x_split[i][:, j : j + n])
+            j += n
+        return logits
+
+    def _compute_classification(self, x, y):
+        x_split, _ = self._encode_split(x)
+        logits = self._split_logits(x_split)
+        loss, attr_loss = self.loss_fn(logits, y)
+        metrics, attr_metrics = self._compute_metrics(logits, y)
+        log_dict = self._compose_logging_dict(loss, attr_loss, metrics, attr_metrics)
+        return loss, log_dict
+
+    def _compute_losses(self, x, y):
+        if x.dim() == 5:
+            batch_size, num_views = x.shape[:2]
+            x_flat = x.reshape(batch_size * num_views, *x.shape[2:])
+            y_flat = y.reshape(batch_size * num_views, y.shape[-1])
+            cls_loss, log_dict = self._compute_classification(x_flat, y_flat)
+
+            _, reps_flat = self._encode_split(x_flat)
+            reps = reps_flat.view(batch_size, num_views, -1)
+            mixer_loss = torch.tensor(0.0, device=reps.device)
+            if num_views >= 4:
+                mixer_inputs = reps[:, :3, :]
+                target_rep = reps[:, 3, :]
+                if self.mixer_detach_target:
+                    target_rep = target_rep.detach()
+                mixed_rep = self.mixer(mixer_inputs)
+                mixer_loss = self.mixer_loss_fn(mixed_rep, target_rep)
+                if self.use_mixer_classifier:
+                    mixed_split = torch.split(
+                        mixed_rep, self.out_dim, dim=1
+                    )
+                    mixer_logits = self._split_logits(mixed_split)
+                    mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, 3, :])
+                    mixer_loss = mixer_loss + mixer_cls_loss
+            return cls_loss, mixer_loss, log_dict
+
+        cls_loss, log_dict = self._compute_classification(x, y)
+        mixer_loss = torch.tensor(0.0, device=x.device)
+        return cls_loss, mixer_loss, log_dict
+
+    def forward(self, x):
+        if x.dim() == 5:
+            x = x[:, -1]
+        x_split, _ = self._encode_split(x)
+        return self._split_logits(x_split)
+
+    def train_step(self, x, y, optimizer, amp_scaler=None, **kwargs):
+        optimizer.zero_grad()
+        if amp_scaler:
+            with torch.amp.autocast("cuda"):
+                cls_loss, mixer_loss, log_dict = self._compute_losses(x, y)
+                total_loss = cls_loss + self.mixer_loss_weight * mixer_loss
+            amp_scaler.scale(total_loss).backward()
+            total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.parameters(), max_norm=1e3
+            )
+            if total_grad_norm.isfinite:
+                amp_scaler.step(optimizer)
+                amp_scaler.update()
+            log_dict["mixer_loss"] = mixer_loss.item()
+            log_dict["total_loss"] = total_loss.item()
+            return log_dict
+
+        cls_loss, mixer_loss, log_dict = self._compute_losses(x, y)
+        total_loss = cls_loss + self.mixer_loss_weight * mixer_loss
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1e3)
+        optimizer.step()
+        log_dict["mixer_loss"] = mixer_loss.item()
+        log_dict["total_loss"] = total_loss.item()
+        return log_dict
+
+    @torch.no_grad()
+    def validation_step(self, x, y=None, **kwargs):
+        cls_loss, mixer_loss, log_dict = self._compute_losses(x, y)
+        total_loss = cls_loss + self.mixer_loss_weight * mixer_loss
+        log_dict["mixer_loss"] = mixer_loss.item()
+        log_dict["total_loss"] = total_loss.item()
+        return log_dict
