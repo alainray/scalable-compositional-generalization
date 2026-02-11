@@ -200,6 +200,9 @@ class SplitResNet18Mixer(SplitResNet18):
     ):
         super().__init__(**kwargs)
         rep_dim = self.out_dim * len(self.attribute_sizes)
+        self.task_classifiers = nn.ModuleList(
+            [nn.Linear(rep_dim, attr_size) for attr_size in self.attribute_sizes]
+        )
         self.mixer = RepresentationMixer(
             emb_dim=rep_dim,
             num_layers=mixer_num_layers,
@@ -229,17 +232,13 @@ class SplitResNet18Mixer(SplitResNet18):
         rep = torch.cat(x_split, dim=1)
         return x_split, rep
 
-    def _split_logits(self, x_split):
-        logits = []
-        j = 0
-        for i, n in enumerate(self.attribute_sizes):
-            logits.append(x_split[i][:, j : j + n])
-            j += n
-        return logits
+    def _split_logits(self, rep):
+        return [classifier(rep) for classifier in self.task_classifiers]
 
-    def _compute_classification(self, x, y):
-        x_split, _ = self._encode_split(x)
-        logits = self._split_logits(x_split)
+    def _compute_classification(self, reps, y):
+        logits = self._split_logits(reps)
+        if y is not None and y.dim() > 2:
+            y = y.reshape(-1, y.shape[-1])
         loss, attr_loss = self.loss_fn(logits, y)
         metrics, attr_metrics = self._compute_metrics(logits, y)
         log_dict = self._compose_logging_dict(loss, attr_loss, metrics, attr_metrics)
@@ -250,9 +249,8 @@ class SplitResNet18Mixer(SplitResNet18):
             batch_size, num_views = x.shape[:2]
             x_flat = x.reshape(batch_size * num_views, *x.shape[2:])
             y_flat = y.reshape(batch_size * num_views, y.shape[-1])
-            cls_loss, log_dict = self._compute_classification(x_flat, y_flat)
-
             _, reps_flat = self._encode_split(x_flat)
+            cls_loss, log_dict = self._compute_classification(reps_flat, y_flat)
             reps = reps_flat.view(batch_size, num_views, -1)
             mixer_loss = torch.tensor(0.0, device=reps.device)
             if num_views >= 4:
@@ -263,23 +261,21 @@ class SplitResNet18Mixer(SplitResNet18):
                 mixed_rep = self.mixer(mixer_inputs)
                 mixer_loss = self.mixer_loss_fn(mixed_rep, target_rep)
                 if self.use_mixer_classifier:
-                    mixed_split = torch.split(
-                        mixed_rep, self.out_dim, dim=1
-                    )
-                    mixer_logits = self._split_logits(mixed_split)
+                    mixer_logits = self._split_logits(mixed_rep)
                     mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, 3, :])
                     mixer_loss = mixer_loss + mixer_cls_loss
             return cls_loss, mixer_loss, log_dict
 
-        cls_loss, log_dict = self._compute_classification(x, y)
-        mixer_loss = torch.tensor(0.0, device=x.device)
+        _, reps = self._encode_split(x)
+        cls_loss, log_dict = self._compute_classification(reps, y)
+        mixer_loss = torch.tensor(0.0, device=reps.device)
         return cls_loss, mixer_loss, log_dict
 
     def forward(self, x):
         if x.dim() == 5:
             x = x[:, -1]
-        x_split, _ = self._encode_split(x)
-        return self._split_logits(x_split)
+        _, reps = self._encode_split(x)
+        return self._split_logits(reps)
 
     def train_step(self, x, y, optimizer, amp_scaler=None, **kwargs):
         optimizer.zero_grad()
