@@ -225,6 +225,13 @@ def parse_args():
     parser.add_argument("--path", type=str, default="out/")
     parser.add_argument("--experiment", type=str, default="orthotopic")
     parser.add_argument("--split", type=str, default="composition_0.1")
+    parser.add_argument(
+        "--selection",
+        type=str,
+        default="id",
+        choices=["id", "ood", "wio", "oracle"],
+        help="Model selection criterion used to build the output dataframe",
+    )
     return parser.parse_known_args()
 
 
@@ -317,6 +324,10 @@ def check_arch_counts(df, max_c):
 
 def main():
     args, uknw = parse_args()
+    selection_to_fn = {
+        "id": parse_id,
+    }
+    parse_result_fn = selection_to_fn.get(args.selection)
     df = pd.DataFrame(columns=list(CFG_TO_COL.values())+METRICS)
     base_path = os.path.join(args.path, args.experiment, args.dataset)
     c_list = [ f.path for f in os.scandir(base_path) if f.is_dir() ]
@@ -341,7 +352,10 @@ def main():
                         if PARSE_LOG:
                             parse_training_metrics(r)
                         # process experiment and log the results in the dataframe
-                        res = parse_id(r)
+                        if parse_result_fn is not None:
+                            res = parse_result_fn(r)
+                        else:
+                            res = process_experiment(r)[args.selection]
                         res["arch"] = model_name
                         res["c"] = c
                         res["seed"] = id
@@ -352,7 +366,7 @@ def main():
                         print(e)    
     print("Data loaded.")
     check_arch_counts(df, max(parsed_int_cs))
-    df.to_pickle(f"{args.dataset}.pkl")
+    df.to_pickle(f"{args.dataset}_{args.selection}.pkl")
 
 
 
