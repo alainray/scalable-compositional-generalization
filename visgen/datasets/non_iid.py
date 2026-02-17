@@ -28,16 +28,21 @@ class NonIIDWrapper(Dataset):
         seed: Optional[int] = None,
         allowed_attributes: Optional[Sequence[str]] = None,
         shared_other_attributes: bool = True,
+        fully_iid: bool = False,
     ) -> None:
         self.dataset = dataset
         self.max_resample_attempts = max_resample_attempts
         self.rng = np.random.default_rng(seed)
         self.shared_other_attributes = shared_other_attributes
+        self.fully_iid = fully_iid
         self._targets, self._attribute_values = self._prepare_targets(dataset)
         self._index_by_target = self._build_index(self._targets)
-        self._attribute_indices = self._resolve_attribute_indices(
-            allowed_attributes
-        )
+        if self.fully_iid:
+            self._attribute_indices = np.array([], dtype=int)
+        else:
+            self._attribute_indices = self._resolve_attribute_indices(
+                allowed_attributes
+            )
 
     @staticmethod
     def _unwrap_subset(dataset: Dataset) -> Tuple[Dataset, Optional[np.ndarray]]:
@@ -56,6 +61,16 @@ class NonIIDWrapper(Dataset):
 
     def __getitem__(self, index: int):
         del index
+        if self.fully_iid:
+            sampled_indices = self.rng.choice(
+                len(self.dataset), size=self.group_size, replace=True
+            )
+            images, targets = zip(
+                *(self.dataset[int(idx)] for idx in sampled_indices)
+            )
+            images = self._stack_images(images)
+            targets = torch.as_tensor(np.stack(targets))
+            return images, targets
         for _ in range(self.max_resample_attempts):
             attr_a, attr_b = self.rng.choice(
                 self._attribute_indices, size=2, replace=False

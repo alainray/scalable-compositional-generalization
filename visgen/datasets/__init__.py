@@ -107,6 +107,7 @@ def _wrap_non_iid(dataset, cfg, split_name=None):
 		seed=non_iid_cfg.get("seed"),
 		allowed_attributes=allowed_attributes,
 		shared_other_attributes=non_iid_cfg.get("shared_other_attributes", True),
+		fully_iid=non_iid_cfg.get("fully_iid", False),
 	)
 
 
