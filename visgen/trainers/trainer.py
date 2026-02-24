@@ -65,6 +65,9 @@ class BaseTrainer:
         amp_scaler = (
             torch.amp.GradScaler("cuda") if self.cfg.get("fp-16", False) else None
         )
+        grad_accum_steps = int(self.cfg.get("grad_accum_steps", 1))
+        if grad_accum_steps < 1:
+            raise ValueError("training.grad_accum_steps must be >= 1")
 
         # CHECKPOINTING
         # handle training re-start or continuation
@@ -116,12 +119,21 @@ class BaseTrainer:
 
             # training steps
             model.train()
-            for x, y in tqdm(train_loader, disable=not self.cfg["verbose"]):
+            optimizer.zero_grad(set_to_none=True)
+            num_train_batches = len(train_loader)
+            for i_batch, (x, y) in enumerate(
+                tqdm(train_loader, disable=not self.cfg["verbose"]), start=1
+            ):
+                step_optimizer = (
+                    i_batch % grad_accum_steps == 0 or i_batch == num_train_batches
+                )
                 d_train = model.train_step(
                     x=x.to(self.device),
                     y=y.to(self.device),
                     optimizer=optimizer,
                     amp_scaler=amp_scaler,
+                    step_optimizer=step_optimizer,
+                    grad_accum_steps=grad_accum_steps,
                     **kwargs,
                 )
                 for k, v in d_train.items():

@@ -59,26 +59,33 @@ class BaseModel(torch.nn.Module):
         return {self.loss_fn.name: loss.item()} | met | attr_loss | attr_met
 
     def train_step(self, x, y, optimizer, amp_scaler=None, **kwargs):
-        optimizer.zero_grad()
+        step_optimizer = kwargs.get("step_optimizer", True)
+        grad_accum_steps = kwargs.get("grad_accum_steps", 1)
+        scaled_loss_divisor = max(1, grad_accum_steps)
         if amp_scaler:
             with torch.amp.autocast("cuda"):
                 yp = self(x)
                 loss, attr_loss = self.loss_fn(yp, y)
-                amp_scaler.scale(loss).backward()
+            amp_scaler.scale(loss / scaled_loss_divisor).backward()
+            if step_optimizer:
                 total_grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.parameters(), max_norm=1e3
                 )
-            if total_grad_norm.isfinite:
-                amp_scaler.step(optimizer)
-                amp_scaler.update()
+                if total_grad_norm.isfinite:
+                    amp_scaler.step(optimizer)
+                    amp_scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
         else:
             yp = self(x)
-            loss, attr_loss = self.loss(yp, y)
-            loss.backward()
-            total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.parameters(), max_norm=1e3
-            )
-            optimizer.step()
+            loss, attr_loss = self.loss_fn(yp, y)
+            (loss / scaled_loss_divisor).backward()
+            if step_optimizer:
+                total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.parameters(), max_norm=1e3
+                )
+                if total_grad_norm.isfinite:
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
         metrics, attr_metrics = self._compute_metrics(yp, y)
         return self._compose_logging_dict(loss, attr_loss, metrics, attr_metrics)
 
