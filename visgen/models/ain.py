@@ -155,7 +155,9 @@ class SplitResNet18(ResNet):
 
     def train_step(self, x, y, optimizer, amp_scaler=None, **kwargs):
         # train step
-        optimizer.zero_grad()
+        step_optimizer = kwargs.get("step_optimizer", True)
+        grad_accum_steps = kwargs.get("grad_accum_steps", 1)
+        scaled_loss_divisor = max(1, grad_accum_steps)
         if amp_scaler:
             with torch.cuda.amp.autocast():
                 yp, yhp = self(x, 'train')
@@ -163,23 +165,28 @@ class SplitResNet18(ResNet):
                 yloss, attr_loss = self.loss_fn(yp, y)
                 hloss, _ = self.loss_fn(yhp, y)
                 loss = yloss + self.exit_reg * hloss
-                amp_scaler.scale(loss).backward()
+            amp_scaler.scale(loss / scaled_loss_divisor).backward()
+            if step_optimizer:
                 total_grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.parameters(), max_norm=1e3
                 )
-            # update the model
-            if total_grad_norm.isfinite:
-                amp_scaler.step(optimizer)
-                amp_scaler.update()
+                # update the model
+                if total_grad_norm.isfinite:
+                    amp_scaler.step(optimizer)
+                    amp_scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
         else:
             yp = self(x)
             # main loss
-            loss, attr_loss = self.loss(yp, y)
-            loss.backward()
-            total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.parameters(), max_norm=1e3
-            )
-            optimizer.step()
+            loss, attr_loss = self.loss_fn(yp, y)
+            (loss / scaled_loss_divisor).backward()
+            if step_optimizer:
+                total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.parameters(), max_norm=1e3
+                )
+                if total_grad_norm.isfinite:
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
         # compute metrics
         metrics, attr_metrics = self._compute_metrics(yp, y)
         # compose log dictionary
@@ -281,27 +288,36 @@ class SplitResNet18Mixer(SplitResNet18):
         return self._split_logits(x_split)
 
     def train_step(self, x, y, optimizer, amp_scaler=None, **kwargs):
-        optimizer.zero_grad()
+        step_optimizer = kwargs.get("step_optimizer", True)
+        grad_accum_steps = kwargs.get("grad_accum_steps", 1)
+        scaled_loss_divisor = max(1, grad_accum_steps)
         if amp_scaler:
             with torch.amp.autocast("cuda"):
                 cls_loss, mixer_loss, log_dict = self._compute_losses(x, y)
                 total_loss = cls_loss + self.mixer_loss_weight * mixer_loss
-            amp_scaler.scale(total_loss).backward()
-            total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.parameters(), max_norm=1e3
-            )
-            if total_grad_norm.isfinite:
-                amp_scaler.step(optimizer)
-                amp_scaler.update()
+            amp_scaler.scale(total_loss / scaled_loss_divisor).backward()
+            if step_optimizer:
+                total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.parameters(), max_norm=1e3
+                )
+                if total_grad_norm.isfinite:
+                    amp_scaler.step(optimizer)
+                    amp_scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
             log_dict["mixer_loss"] = mixer_loss.item()
             log_dict["total_loss"] = total_loss.item()
             return log_dict
 
         cls_loss, mixer_loss, log_dict = self._compute_losses(x, y)
         total_loss = cls_loss + self.mixer_loss_weight * mixer_loss
-        total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1e3)
-        optimizer.step()
+        (total_loss / scaled_loss_divisor).backward()
+        if step_optimizer:
+            total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.parameters(), max_norm=1e3
+            )
+            if total_grad_norm.isfinite:
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
         log_dict["mixer_loss"] = mixer_loss.item()
         log_dict["total_loss"] = total_loss.item()
         return log_dict
