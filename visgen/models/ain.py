@@ -203,6 +203,7 @@ class SplitResNet18Mixer(SplitResNet18):
         mixer_loss_weight=1.0,
         mixer_detach_target=False,
         use_mixer_classifier=False,
+        use_all_mixer_cases=False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -220,6 +221,7 @@ class SplitResNet18Mixer(SplitResNet18):
         self.mixer_loss_weight = mixer_loss_weight
         self.mixer_detach_target = mixer_detach_target
         self.use_mixer_classifier = use_mixer_classifier
+        self.use_all_mixer_cases = use_all_mixer_cases
         self._logged_metrics = self._logged_metrics + ["mixer_loss", "total_loss"]
 
     def _encode_split(self, x):
@@ -264,16 +266,29 @@ class SplitResNet18Mixer(SplitResNet18):
             reps = reps_flat.view(batch_size, num_views, -1)
             mixer_loss = torch.tensor(0.0, device=reps.device)
             if num_views >= 4:
-                mixer_inputs = reps[:, :3, :]
-                target_rep = reps[:, 3, :]
-                if self.mixer_detach_target:
-                    target_rep = target_rep.detach()
-                mixed_rep = self.mixer(mixer_inputs)
-                mixer_loss = self.mixer_loss_fn(mixed_rep, target_rep)
-                if self.use_mixer_classifier:
-                    mixer_logits = self._split_logits(self._split_rep_chunks(mixed_rep))
-                    mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, 3, :])
-                    mixer_loss = mixer_loss + mixer_cls_loss
+                if self.use_all_mixer_cases:
+                    case_specs = [
+                        (3, [0, 1, 2]),
+                        (0, [2, 1, 0]),
+                        (1, [2, 3, 0]),
+                        (2, [1, 0, 3]),
+                    ]
+                else:
+                    case_specs = [(3, [0, 1, 2])]
+                mixer_terms = []
+                for target_idx, input_indices in case_specs:
+                    mixer_inputs = reps[:, input_indices, :]
+                    target_rep = reps[:, target_idx, :]
+                    if self.mixer_detach_target:
+                        target_rep = target_rep.detach()
+                    mixed_rep = self.mixer(mixer_inputs)
+                    term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
+                    if self.use_mixer_classifier and y is not None and y.dim() > 2:
+                        mixer_logits = self._split_logits(self._split_rep_chunks(mixed_rep))
+                        mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, target_idx, :])
+                        term_loss = term_loss + mixer_cls_loss
+                    mixer_terms.append(term_loss)
+                mixer_loss = torch.stack(mixer_terms).mean()
             return cls_loss, mixer_loss, log_dict
 
         x_split, reps = self._encode_split(x)
