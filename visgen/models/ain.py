@@ -200,6 +200,8 @@ class SplitResNet18Mixer(SplitResNet18):
         mixer_num_layers=2,
         mixer_num_heads=4,
         mixer_dropout=0.0,
+        mixer_rep_dim=None,
+        mixer_rep_piece_dim=None,
         mixer_loss_weight=1.0,
         mixer_detach_target=False,
         use_mixer_classifier=False,
@@ -208,11 +210,34 @@ class SplitResNet18Mixer(SplitResNet18):
     ):
         super().__init__(**kwargs)
         rep_dim = self.out_dim * len(self.attribute_sizes)
+        num_pieces = len(self.attribute_sizes)
+        if mixer_rep_piece_dim is not None:
+            mixer_piece_dim = mixer_rep_piece_dim
+        elif mixer_rep_dim is not None:
+            if mixer_rep_dim % num_pieces != 0:
+                raise ValueError(
+                    f"mixer_rep_dim ({mixer_rep_dim}) must be divisible by number of pieces ({num_pieces})."
+                )
+            mixer_piece_dim = mixer_rep_dim // num_pieces
+        else:
+            mixer_piece_dim = self.out_dim
+        mixer_dim = mixer_piece_dim * num_pieces
         self.task_classifiers = nn.ModuleList(
             [nn.Linear(self.out_dim, attr_size) for attr_size in self.attribute_sizes]
         )
+        if mixer_piece_dim == self.out_dim:
+            self.mixer_piece_projections = nn.ModuleList(
+                [nn.Identity() for _ in self.attribute_sizes]
+            )
+        else:
+            self.mixer_piece_projections = nn.ModuleList(
+                [nn.Linear(self.out_dim, mixer_piece_dim) for _ in self.attribute_sizes]
+            )
+        self.mixer_output_projection = (
+            nn.Identity() if mixer_dim == rep_dim else nn.Linear(mixer_dim, rep_dim)
+        )
         self.mixer = RepresentationMixer(
-            emb_dim=rep_dim,
+            emb_dim=mixer_dim,
             num_layers=mixer_num_layers,
             num_heads=mixer_num_heads,
             dropout=mixer_dropout,
@@ -246,6 +271,14 @@ class SplitResNet18Mixer(SplitResNet18):
 
     def _split_rep_chunks(self, rep):
         return torch.split(rep, self.out_dim, dim=1)
+
+    def _project_rep_pieces(self, rep):
+        rep_chunks = torch.split(rep, self.out_dim, dim=-1)
+        projected_chunks = [
+            proj(rep_chunk)
+            for proj, rep_chunk in zip(self.mixer_piece_projections, rep_chunks)
+        ]
+        return torch.cat(projected_chunks, dim=-1)
 
     def _compute_classification(self, x_split, y):
         logits = self._split_logits(x_split)
@@ -281,7 +314,9 @@ class SplitResNet18Mixer(SplitResNet18):
                     target_rep = reps[:, target_idx, :]
                     if self.mixer_detach_target:
                         target_rep = target_rep.detach()
-                    mixed_rep = self.mixer(mixer_inputs)
+                    mixed_rep = self._project_rep_pieces(mixer_inputs)
+                    mixed_rep = self.mixer(mixed_rep)
+                    mixed_rep = self.mixer_output_projection(mixed_rep)
                     term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
                     if self.use_mixer_classifier and y is not None and y.dim() > 2:
                         mixer_logits = self._split_logits(self._split_rep_chunks(mixed_rep))
