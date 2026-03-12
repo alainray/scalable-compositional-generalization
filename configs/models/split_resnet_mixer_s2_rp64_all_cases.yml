@@ -1,0 +1,28 @@
+model:
+  arch: split_resnet_mixer
+  pretrained: False
+  emb_dim: 512
+  maxpool: 1
+  out_activation: linear
+  activation: relu
+  split_layers: 2
+  exit_reg: 10
+  mixer:
+    num_layers: 2
+    num_heads: 4
+    dropout: 0.1
+    rep_piece_dim: 64
+    loss_weight: 1.0
+    detach_target: False
+    use_classifier: False
+    use_all_cases: True
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    batch_size: 256
+  testing:
+    batch_size: 2048
