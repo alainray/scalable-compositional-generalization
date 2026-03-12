@@ -21,11 +21,13 @@ class SplitResNet18(ResNet):
 
         if self.replace_stride_with_dilation is None:
             replace_stride_with_dilation = [False, False, False]
+        else:
+            replace_stride_with_dilation = self.replace_stride_with_dilation
 
         self.split_layers = split_layers
         self.exit_reg = exit_reg
         self.layer_planes = [2**i for i in range(6, 10)]
-        self.exit_head_emb_size = [2**i for i in range(14, 9, -1)]
+        self.exit_head_in_channels = [64, 64, 128, 256, 512][self.split_layers]
 
         split_blocks = []
         for _ in self.attribute_sizes:
@@ -80,12 +82,11 @@ class SplitResNet18(ResNet):
             split_blocks.append(nn.Sequential(*split_block))
             
         self.split_block = nn.ModuleList(split_blocks)
-        self.exit_head = nn.Linear(self.exit_head_emb_size[self.split_layers], sum(self.attribute_sizes))
+        self.exit_head = nn.Linear(self.exit_head_in_channels, sum(self.attribute_sizes))
         self.exit_avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         shared_blocks = []
         for i in range(self.split_layers, 4):
-            print(i, self.layer_planes[i], self.layers[i])
             if i == 0:
                 dilate = False
                 stride = 1
@@ -134,6 +135,8 @@ class SplitResNet18(ResNet):
         # early exit embeddings
         h = self.exit_avgpool(h)
         h = torch.flatten(h, 1)
+        if h.shape[1] < sum(self.attribute_sizes):
+            h = self.exit_head(h)
 
         if self.objective == "classification":
             # split output into separate list per attribute
