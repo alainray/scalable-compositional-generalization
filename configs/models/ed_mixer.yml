@@ -1,0 +1,40 @@
+model:
+
+  arch: ed_mixer
+  z_dim: &HD_DIM 512
+
+  feature_extraction:
+    arch: resnet18
+    pretrained: False
+    maxpool: 1
+    activation: relu
+
+  readout:
+    arch: cosine_circ_conv
+    codebook:
+      init: FPE
+      load: False
+      trainable: False
+      pos_delta: 0.4
+      plot_similarity: False
+
+  mixer:
+    num_layers: 2
+    num_heads: 4
+    dropout: 0.0
+    rep_dim: null
+    rep_piece_dim: null
+    loss_weight: 1.0
+    detach_target: False
+    use_classifier: False
+    use_all_cases: False
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    batch_size: 2048
+  testing:
+    batch_size: 4096
