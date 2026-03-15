@@ -46,6 +46,8 @@ class ResNet18Mixer(BaseModel):
         mixer_detach_target: bool = False,
         use_mixer_classifier: bool = False,
         use_all_mixer_cases: bool = False,
+        mixer_rep_dim: int = None,
+        mixer_rep_piece_dim: int = None,
         *args,
         **kwargs,
     ) -> None:
@@ -59,6 +61,22 @@ class ResNet18Mixer(BaseModel):
         self.mixer_detach_target = mixer_detach_target
         self.use_mixer_classifier = use_mixer_classifier
         self.use_all_mixer_cases = use_all_mixer_cases
+        if mixer_rep_piece_dim is not None:
+            mixer_hidden_dim = mixer_rep_piece_dim
+        elif mixer_rep_dim is not None:
+            mixer_hidden_dim = mixer_rep_dim
+        else:
+            mixer_hidden_dim = None
+        self.mixer_input_projection = (
+            nn.Identity()
+            if mixer_hidden_dim is None
+            else nn.Linear(self.encoder.out_dim, mixer_hidden_dim)
+        )
+        self.mixer_output_projection = (
+            nn.Identity()
+            if mixer_hidden_dim is None
+            else nn.Linear(mixer_hidden_dim, self.encoder.out_dim)
+        )
         self.mixer_loss_fn = nn.MSELoss()
         self._logged_metrics = self._logged_metrics + ["mixer_loss", "total_loss"]
 
@@ -122,7 +140,9 @@ class ResNet18Mixer(BaseModel):
                     target_rep = reps[:, target_idx, :]
                     if self.mixer_detach_target:
                         target_rep = target_rep.detach()
-                    mixed_rep = self.mixer(mixer_inputs)
+                    mixed_rep = self.mixer_input_projection(mixer_inputs)
+                    mixed_rep = self.mixer(mixed_rep)
+                    mixed_rep = self.mixer_output_projection(mixed_rep)
                     term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
                     if self.use_mixer_classifier and y is not None and y.dim() > 2:
                         mixer_logits = self._classifier_outputs(mixed_rep)
