@@ -40,6 +40,9 @@ class _FourCaseSupportAnalyzer:
 
     def _prepare(self, dataset, allowed_attributes):
         targets, attribute_values = NonIIDWrapper._prepare_targets(self, dataset)
+        # Reuse NonIIDWrapper attribute resolution logic, which expects these names.
+        self._targets = targets
+        self._attribute_values = attribute_values
         if allowed_attributes is None:
             attribute_indices = np.array(
                 [
@@ -54,6 +57,10 @@ class _FourCaseSupportAnalyzer:
                 self, allowed_attributes
             )
         return targets, attribute_values, attribute_indices
+
+    @staticmethod
+    def _unwrap_subset(dataset: Dataset) -> Tuple[Dataset, Optional[np.ndarray]]:
+        return NonIIDWrapper._unwrap_subset(dataset)
 
     def valid_sample_mask(self, shared_other_attributes: bool) -> np.ndarray:
         if len(self.attribute_indices) < 2:
