@@ -39,14 +39,16 @@ class BaseTrainer:
         num_ood_sets = len(ood_val_keys)
         ood_val_loaders = [d_dataloaders[key] for key in ood_val_keys]
         extra_eval_loaders = []
-        if "validation_raw" in d_dataloaders:
-            extra_eval_loaders.append(
-                ("validation_raw", d_dataloaders["validation_raw"])
-            )
-        if "testing_raw" in d_dataloaders:
-            extra_eval_loaders.append(
-                ("testing_raw", d_dataloaders["testing_raw"])
-            )
+        eval_blacklist = {
+            "training",
+            "validation",
+            "testing",
+        }
+        eval_blacklist |= set(ood_val_keys)
+        for key in sorted(d_dataloaders.keys()):
+            if key in eval_blacklist:
+                continue
+            extra_eval_loaders.append((key, d_dataloaders[key]))
         kwargs = {"dataset_size": len(train_loader.dataset)}
         selection_metric = self.cfg.selection_metric
         best_val_metric = -np.inf if "acc" in selection_metric else np.inf

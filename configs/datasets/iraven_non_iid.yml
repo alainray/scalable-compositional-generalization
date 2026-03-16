@@ -13,10 +13,15 @@ data:
     batch_size: 1024
     downsample: 0
     val_fraction: 0.1
+    val_4cases:
+      enabled: True
+      replace_validation: False
+      export_split: True
+
     num_workers: 1
     non_iid:
       name: non_iid
-      apply_to: ["training"]
+      apply_to: ["training", "val_4cases"]
     attributes: &ATT
       - name: position
         out_dim: ${num_pos:${data.training.dataset_subset}}
