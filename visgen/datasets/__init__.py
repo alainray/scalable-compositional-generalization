@@ -109,6 +109,9 @@ def _wrap_non_iid(dataset, cfg, split_name=None):
 		allowed_attributes=allowed_attributes,
 		shared_other_attributes=non_iid_cfg.get("shared_other_attributes", True),
 		fully_iid=non_iid_cfg.get("fully_iid", False),
+		deterministic=non_iid_cfg.get("deterministic", False),
+		precompute_deterministic=non_iid_cfg.get("precompute_deterministic", False),
+		max_deterministic_candidates=non_iid_cfg.get("max_deterministic_candidates", 1_024),
 	)
 
 

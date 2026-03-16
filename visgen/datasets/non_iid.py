@@ -160,20 +160,29 @@ class NonIIDWrapper(Dataset):
         allowed_attributes: Optional[Sequence[str]] = None,
         shared_other_attributes: bool = True,
         fully_iid: bool = False,
+        deterministic: bool = False,
+        precompute_deterministic: bool = False,
+        max_deterministic_candidates: int = 1_024,
     ) -> None:
         self.dataset = dataset
         self.max_resample_attempts = max_resample_attempts
         self.rng = np.random.default_rng(seed)
         self.shared_other_attributes = shared_other_attributes
         self.fully_iid = fully_iid
+        self.deterministic = deterministic
+        self.precompute_deterministic = precompute_deterministic
+        self.max_deterministic_candidates = max_deterministic_candidates
         self._targets, self._attribute_values = self._prepare_targets(dataset)
         self._index_by_target = self._build_index(self._targets)
+        self._deterministic_candidates: Optional[List[List[int]]] = None
         if self.fully_iid:
             self._attribute_indices = np.array([], dtype=int)
         else:
             self._attribute_indices = self._resolve_attribute_indices(
                 allowed_attributes
             )
+        if self.deterministic and self.precompute_deterministic:
+            self._deterministic_candidates = self._build_deterministic_candidates()
 
     @staticmethod
     def _unwrap_subset(dataset: Dataset) -> Tuple[Dataset, Optional[np.ndarray]]:
@@ -191,7 +200,6 @@ class NonIIDWrapper(Dataset):
         return len(self.dataset) // self.group_size
 
     def __getitem__(self, index: int):
-        del index
         if self.fully_iid:
             sampled_indices = self.rng.choice(
                 len(self.dataset), size=self.group_size, replace=True
@@ -199,6 +207,12 @@ class NonIIDWrapper(Dataset):
             images, targets = zip(
                 *(self.dataset[int(idx)] for idx in sampled_indices)
             )
+            images = self._stack_images(images)
+            targets = torch.as_tensor(np.stack(targets))
+            return images, targets
+        if self.deterministic:
+            indices = self._get_deterministic_indices(index)
+            images, targets = zip(*(self.dataset[idx] for idx in indices))
             images = self._stack_images(images)
             targets = torch.as_tensor(np.stack(targets))
             return images, targets
@@ -225,9 +239,123 @@ class NonIIDWrapper(Dataset):
             images = self._stack_images(images)
             targets = torch.as_tensor(np.stack(targets))
             return images, targets
+        fallback_indices = self._get_deterministic_indices(index, allow_lazy_search=True)
+        if fallback_indices is not None:
+            images, targets = zip(*(self.dataset[idx] for idx in fallback_indices))
+            images = self._stack_images(images)
+            targets = torch.as_tensor(np.stack(targets))
+            return images, targets
         raise RuntimeError(
             "Failed to sample a valid non-iid batch within the resample limit."
         )
+
+    def _get_deterministic_indices(
+        self, index: int, allow_lazy_search: bool = False
+    ) -> List[int]:
+        if self._deterministic_candidates is None:
+            if (not self.deterministic) and (not allow_lazy_search):
+                raise RuntimeError("Deterministic non-iid sampling is disabled.")
+            self._deterministic_candidates = self._build_deterministic_candidates()
+        if not self._deterministic_candidates:
+            raise RuntimeError(
+                "Failed to sample a valid non-iid batch: no deterministic "
+                "candidate quadrants were found."
+            )
+        return self._deterministic_candidates[index % len(self._deterministic_candidates)]
+
+    def _build_deterministic_candidates(self) -> List[List[int]]:
+        if self.fully_iid:
+            return []
+        candidates: List[List[int]] = []
+        seen = set()
+        for i, attr_a in enumerate(self._attribute_indices):
+            for attr_b in self._attribute_indices[i + 1 :]:
+                if self.shared_other_attributes:
+                    pair_candidates = self._find_rectangle_indices_shared(
+                        attr_a, attr_b, collect_all=True
+                    )
+                else:
+                    pair_candidates = self._find_rectangle_indices_unshared(
+                        attr_a, attr_b, collect_all=True
+                    )
+                for candidate in pair_candidates:
+                    key = tuple(candidate)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidates.append(candidate)
+                    if len(candidates) >= self.max_deterministic_candidates:
+                        return candidates
+        return candidates
+
+    def _find_valid_indices_deterministic(self) -> Optional[List[int]]:
+        candidates = self._build_deterministic_candidates()
+        if not candidates:
+            return None
+        return candidates[0]
+
+    def _find_rectangle_indices_shared(
+        self, attr_a: int, attr_b: int, collect_all: bool = False
+    ) -> List[List[int]]:
+        other_indices = [
+            idx for idx in range(self._targets.shape[1]) if idx not in (attr_a, attr_b)
+        ]
+        groups = defaultdict(list)
+        for idx, row in enumerate(self._targets):
+            other_key = tuple(row[other_indices].tolist())
+            groups[other_key].append(idx)
+        results: List[List[int]] = []
+        for _, group_rows in sorted(groups.items(), key=lambda item: item[0]):
+            candidate = self._rectangle_indices_from_rows(group_rows, attr_a, attr_b)
+            if candidate is None:
+                continue
+            results.append(candidate)
+            if not collect_all:
+                break
+        return results
+
+    def _find_rectangle_indices_unshared(
+        self, attr_a: int, attr_b: int, collect_all: bool = False
+    ) -> List[List[int]]:
+        candidate = self._rectangle_indices_from_rows(
+            list(range(len(self._targets))), attr_a, attr_b
+        )
+        if candidate is None:
+            return []
+        return [candidate]
+
+    def _rectangle_indices_from_rows(
+        self, row_indices: Sequence[int], attr_a: int, attr_b: int
+    ) -> Optional[List[int]]:
+        edge_to_target = {}
+        a_values = set()
+        b_values = set()
+        for row_idx in row_indices:
+            row = self._targets[row_idx]
+            key = (row[attr_a], row[attr_b])
+            if key not in edge_to_target:
+                edge_to_target[key] = tuple(row.tolist())
+            a_values.add(key[0])
+            b_values.add(key[1])
+        sorted_as = sorted(a_values)
+        sorted_bs = sorted(b_values)
+        for i, value_a in enumerate(sorted_as):
+            for value_b in sorted_as[i + 1 :]:
+                for j, value_c in enumerate(sorted_bs):
+                    for value_d in sorted_bs[j + 1 :]:
+                        corners = [
+                            (value_a, value_c),
+                            (value_a, value_d),
+                            (value_b, value_c),
+                            (value_b, value_d),
+                        ]
+                        if any(corner not in edge_to_target for corner in corners):
+                            continue
+                        return [
+                            int(self._index_by_target[edge_to_target[corner]][0])
+                            for corner in corners
+                        ]
+        return None
 
     def _prepare_targets(self, dataset: Dataset) -> Tuple[np.ndarray, List[List]]:
         base_dataset, indices = self._unwrap_subset(dataset)
