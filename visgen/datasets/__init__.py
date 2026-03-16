@@ -7,6 +7,7 @@ from .iraven import IRAVEN
 from .mpi3d import MPI3D
 from .non_iid import NonIIDWrapper, subset_with_four_case_support
 from .shapes3d import Shapes3D
+from .splits import make_validation_subset, training_subset_with_optional_ood_holdout
 
 
 def _resolve_non_iid_cfg(cfg):
