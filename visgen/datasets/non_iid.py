@@ -6,6 +6,130 @@ import torch
 from torch.utils.data import Dataset, Subset
 
 
+def subset_with_four_case_support(
+    dataset: Dataset,
+    allowed_attributes: Optional[Sequence[str]] = None,
+    shared_other_attributes: bool = True,
+) -> Subset:
+    """Return a subset containing samples that can participate in a 4-case quadrant.
+
+    A sample is kept iff there exists at least one compositional 2x2 pattern using two
+    attributes where this sample is one of the four corners.
+    """
+    analyzer = _FourCaseSupportAnalyzer(dataset, allowed_attributes)
+    valid_mask = analyzer.valid_sample_mask(
+        shared_other_attributes=shared_other_attributes
+    )
+    indices = np.flatnonzero(valid_mask).tolist()
+    return Subset(dataset, indices)
+
+
+class _FourCaseSupportAnalyzer:
+    """Analyze whether samples can form 4-case compositional quadrants."""
+
+    def __init__(
+        self,
+        dataset: Dataset,
+        allowed_attributes: Optional[Sequence[str]] = None,
+    ) -> None:
+        self.dataset = dataset
+        self.targets, self.attribute_values, self.attribute_indices = (
+            self._prepare(dataset, allowed_attributes)
+        )
+        self.num_attributes = self.targets.shape[1]
+
+    def _prepare(self, dataset, allowed_attributes):
+        targets, attribute_values = NonIIDWrapper._prepare_targets(self, dataset)
+        if allowed_attributes is None:
+            attribute_indices = np.array(
+                [
+                    idx
+                    for idx in range(targets.shape[1])
+                    if len(attribute_values[idx]) >= 2
+                ],
+                dtype=int,
+            )
+        else:
+            attribute_indices = NonIIDWrapper._resolve_attribute_indices(
+                self, allowed_attributes
+            )
+        return targets, attribute_values, attribute_indices
+
+    def valid_sample_mask(self, shared_other_attributes: bool) -> np.ndarray:
+        if len(self.attribute_indices) < 2:
+            return np.zeros(len(self.targets), dtype=bool)
+        valid = np.zeros(len(self.targets), dtype=bool)
+        for i, attr_a in enumerate(self.attribute_indices):
+            for attr_b in self.attribute_indices[i + 1 :]:
+                if shared_other_attributes:
+                    valid |= self._mask_for_attr_pair_shared(attr_a, attr_b)
+                else:
+                    valid |= self._mask_for_attr_pair_unshared(attr_a, attr_b)
+        return valid
+
+    def _mask_for_attr_pair_shared(self, attr_a: int, attr_b: int) -> np.ndarray:
+        mask = np.zeros(len(self.targets), dtype=bool)
+        other_indices = [
+            idx for idx in range(self.num_attributes) if idx not in (attr_a, attr_b)
+        ]
+        groups = defaultdict(list)
+        for idx, row in enumerate(self.targets):
+            other_key = tuple(row[other_indices].tolist())
+            groups[other_key].append(idx)
+        for indices in groups.values():
+            edge_to_indices = defaultdict(list)
+            a_to_bs = defaultdict(set)
+            b_to_as = defaultdict(set)
+            for idx in indices:
+                row = self.targets[idx]
+                edge = (row[attr_a], row[attr_b])
+                edge_to_indices[edge].append(idx)
+                a_to_bs[edge[0]].add(edge[1])
+                b_to_as[edge[1]].add(edge[0])
+            valid_edges = _edges_with_rectangle(edge_to_indices, a_to_bs, b_to_as)
+            for edge in valid_edges:
+                mask[edge_to_indices[edge]] = True
+        return mask
+
+    def _mask_for_attr_pair_unshared(self, attr_a: int, attr_b: int) -> np.ndarray:
+        mask = np.zeros(len(self.targets), dtype=bool)
+        edge_to_indices = defaultdict(list)
+        a_to_bs = defaultdict(set)
+        b_to_as = defaultdict(set)
+        for idx, row in enumerate(self.targets):
+            edge = (row[attr_a], row[attr_b])
+            edge_to_indices[edge].append(idx)
+            a_to_bs[edge[0]].add(edge[1])
+            b_to_as[edge[1]].add(edge[0])
+        valid_edges = _edges_with_rectangle(edge_to_indices, a_to_bs, b_to_as)
+        for edge in valid_edges:
+            mask[edge_to_indices[edge]] = True
+        return mask
+
+
+def _edges_with_rectangle(edge_to_indices, a_to_bs, b_to_as):
+    valid_edges = set()
+    edge_set = set(edge_to_indices.keys())
+    for a, b in edge_set:
+        alt_as = b_to_as[b] - {a}
+        alt_bs = a_to_bs[a] - {b}
+        found = False
+        for alt_a in alt_as:
+            for alt_b in alt_bs:
+                if (
+                    (a, alt_b) in edge_set
+                    and (alt_a, b) in edge_set
+                    and (alt_a, alt_b) in edge_set
+                ):
+                    found = True
+                    break
+            if found:
+                break
+        if found:
+            valid_edges.add((a, b))
+    return valid_edges
+
+
 class NonIIDWrapper(Dataset):
     """Wrap a dataset to produce non-iid 4-sample batches.
 
