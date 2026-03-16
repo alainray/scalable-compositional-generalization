@@ -5,7 +5,7 @@ from .clevr import CLEVR
 from .dsprites import DSprites
 from .iraven import IRAVEN
 from .mpi3d import MPI3D
-from .non_iid import NonIIDWrapper
+from .non_iid import NonIIDWrapper, subset_with_four_case_support
 from .shapes3d import Shapes3D
 
 
@@ -111,6 +111,27 @@ def _wrap_non_iid(dataset, cfg, split_name=None):
 	)
 
 
+
+
+def _val_4cases_cfg(cfg):
+	default = {
+		"enabled": False,
+		"shared_other_attributes": None,
+		"allowed_attributes": None,
+		"replace_validation": False,
+		"export_split": True,
+	}
+	v4_cfg = getattr(cfg, "val_4cases", None)
+	if v4_cfg is None:
+		return default
+	if isinstance(v4_cfg, bool):
+		default["enabled"] = v4_cfg
+		return default
+	for key in default.keys():
+		if key in v4_cfg:
+			default[key] = v4_cfg[key]
+	return default
+
 def _attribute_names(base_dataset, cfg=None):
 	if cfg is not None:
 		configured = _config_attribute_names(cfg)
@@ -173,7 +194,39 @@ def get_dataloaders(data_cfg, writer=None):
 			train_data, val_data = random_split(
 				train_data, [train_size, val_size]
 			)
-			datasets = [(key, train_data), ("validation", val_data)]
+			non_iid_cfg = _resolve_non_iid_cfg(cfg)
+			default_shared_other_attributes = True
+			if non_iid_cfg and not isinstance(non_iid_cfg, str):
+				default_shared_other_attributes = non_iid_cfg.get(
+					"shared_other_attributes", True
+				)
+			v4_cfg = _val_4cases_cfg(cfg)
+			datasets = [
+				(key, train_data),
+				("validation", val_data),
+			]
+			if v4_cfg["enabled"]:
+				allowed_attributes = v4_cfg["allowed_attributes"]
+				if not allowed_attributes:
+					allowed_attributes = _config_attribute_names(cfg)
+				shared_other_attributes = v4_cfg["shared_other_attributes"]
+				if shared_other_attributes is None:
+					shared_other_attributes = default_shared_other_attributes
+				val_4cases = subset_with_four_case_support(
+					val_data,
+					allowed_attributes=allowed_attributes,
+					shared_other_attributes=shared_other_attributes,
+				)
+				print(
+					f"[data] val_4cases size: {len(val_4cases)}/{len(val_data)}"
+				)
+				if v4_cfg["replace_validation"]:
+					datasets = [
+						(key, train_data),
+						("validation", val_4cases),
+					]
+				if v4_cfg["export_split"]:
+					datasets.append(("val_4cases", val_4cases))
 			datasets += [
 				(f"ood_validation_{i}", ood_val_data)
 				for (i, ood_val_data) in enumerate(ood_val_sets)
