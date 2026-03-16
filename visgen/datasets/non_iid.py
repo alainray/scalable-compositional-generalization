@@ -163,6 +163,7 @@ class NonIIDWrapper(Dataset):
     ) -> None:
         self.dataset = dataset
         self.max_resample_attempts = max_resample_attempts
+        self.seed = seed
         self.rng = np.random.default_rng(seed)
         self.shared_other_attributes = shared_other_attributes
         self.fully_iid = fully_iid
@@ -191,9 +192,9 @@ class NonIIDWrapper(Dataset):
         return len(self.dataset) // self.group_size
 
     def __getitem__(self, index: int):
-        del index
+        rng = self._rng_for_index(index)
         if self.fully_iid:
-            sampled_indices = self.rng.choice(
+            sampled_indices = rng.choice(
                 len(self.dataset), size=self.group_size, replace=True
             )
             images, targets = zip(
@@ -203,22 +204,15 @@ class NonIIDWrapper(Dataset):
             targets = torch.as_tensor(np.stack(targets))
             return images, targets
         for _ in range(self.max_resample_attempts):
-            attr_a, attr_b = self.rng.choice(
+            attr_a, attr_b = rng.choice(
                 self._attribute_indices, size=2, replace=False
             )
-            value_a, value_b = self._sample_two(self._attribute_values[attr_a])
-            value_c, value_d = self._sample_two(self._attribute_values[attr_b])
-            other_values = self._sample_other_attributes((attr_a, attr_b))
-            desired_targets = self._build_target_quadrant(
-                attr_a,
-                attr_b,
-                value_a,
-                value_b,
-                value_c,
-                value_d,
-                other_values,
+            desired_targets = self._sample_valid_quadrant_targets(
+                attr_a, attr_b, rng
             )
-            indices = self._select_indices(desired_targets)
+            if desired_targets is None:
+                continue
+            indices = self._select_indices(desired_targets, rng)
             if indices is None:
                 continue
             images, targets = zip(*(self.dataset[idx] for idx in indices))
@@ -228,6 +222,109 @@ class NonIIDWrapper(Dataset):
         raise RuntimeError(
             "Failed to sample a valid non-iid batch within the resample limit."
         )
+
+    def _rng_for_index(self, index: int) -> np.random.Generator:
+        if self.seed is None:
+            return self.rng
+        return np.random.default_rng(self.seed + int(index))
+
+    def _sample_valid_quadrant_targets(
+        self,
+        attr_a: int,
+        attr_b: int,
+        rng: np.random.Generator,
+    ) -> Optional[List[Tuple[int, ...]]]:
+        if self.shared_other_attributes:
+            return self._sample_quadrant_targets_shared(attr_a, attr_b, rng)
+        return self._sample_quadrant_targets_unshared(attr_a, attr_b, rng)
+
+    def _sample_quadrant_targets_shared(
+        self,
+        attr_a: int,
+        attr_b: int,
+        rng: np.random.Generator,
+    ) -> Optional[List[Tuple[int, ...]]]:
+        other_indices = [
+            idx for idx in range(self._targets.shape[1]) if idx not in (attr_a, attr_b)
+        ]
+        grouped_edges = defaultdict(lambda: defaultdict(list))
+        for row in self._targets:
+            target = tuple(row.tolist())
+            other_key = tuple(row[other_indices].tolist())
+            edge = (row[attr_a], row[attr_b])
+            grouped_edges[other_key][edge].append(target)
+
+        contexts = list(grouped_edges.keys())
+        if not contexts:
+            return None
+        for context_idx in rng.permutation(len(contexts)):
+            edge_to_targets = grouped_edges[contexts[int(context_idx)]]
+            rectangle = self._sample_rectangle_from_edges(edge_to_targets, rng)
+            if rectangle is None:
+                continue
+            a0, a1, b0, b1 = rectangle
+            return [
+                tuple(rng.choice(edge_to_targets[(a0, b0)]).tolist()),
+                tuple(rng.choice(edge_to_targets[(a0, b1)]).tolist()),
+                tuple(rng.choice(edge_to_targets[(a1, b0)]).tolist()),
+                tuple(rng.choice(edge_to_targets[(a1, b1)]).tolist()),
+            ]
+        return None
+
+    def _sample_quadrant_targets_unshared(
+        self,
+        attr_a: int,
+        attr_b: int,
+        rng: np.random.Generator,
+    ) -> Optional[List[Tuple[int, ...]]]:
+        edge_to_targets = defaultdict(list)
+        for row in self._targets:
+            target = tuple(row.tolist())
+            edge = (row[attr_a], row[attr_b])
+            edge_to_targets[edge].append(target)
+        rectangle = self._sample_rectangle_from_edges(edge_to_targets, rng)
+        if rectangle is None:
+            return None
+        a0, a1, b0, b1 = rectangle
+        return [
+            tuple(rng.choice(edge_to_targets[(a0, b0)]).tolist()),
+            tuple(rng.choice(edge_to_targets[(a0, b1)]).tolist()),
+            tuple(rng.choice(edge_to_targets[(a1, b0)]).tolist()),
+            tuple(rng.choice(edge_to_targets[(a1, b1)]).tolist()),
+        ]
+
+    def _sample_rectangle_from_edges(
+        self,
+        edge_to_targets,
+        rng: np.random.Generator,
+    ) -> Optional[Tuple[int, int, int, int]]:
+        a_to_bs = defaultdict(set)
+        b_to_as = defaultdict(set)
+        edge_set = set(edge_to_targets.keys())
+        if len(edge_set) < 4:
+            return None
+        for a, b in edge_set:
+            a_to_bs[a].add(b)
+            b_to_as[b].add(a)
+
+        edges = list(edge_set)
+        for edge_idx in rng.permutation(len(edges)):
+            a0, b0 = edges[int(edge_idx)]
+            alt_as = list(b_to_as[b0] - {a0})
+            alt_bs = list(a_to_bs[a0] - {b0})
+            if not alt_as or not alt_bs:
+                continue
+            for alt_a_idx in rng.permutation(len(alt_as)):
+                a1 = alt_as[int(alt_a_idx)]
+                for alt_b_idx in rng.permutation(len(alt_bs)):
+                    b1 = alt_bs[int(alt_b_idx)]
+                    if (
+                        (a0, b1) in edge_set
+                        and (a1, b0) in edge_set
+                        and (a1, b1) in edge_set
+                    ):
+                        return a0, a1, b0, b1
+        return None
 
     def _prepare_targets(self, dataset: Dataset) -> Tuple[np.ndarray, List[List]]:
         base_dataset, indices = self._unwrap_subset(dataset)
@@ -347,13 +444,17 @@ class NonIIDWrapper(Dataset):
             build_target(value_b, value_d, other_values_list[3]),
         ]
 
-    def _select_indices(self, targets: Sequence[Tuple[int, ...]]) -> Optional[List]:
+    def _select_indices(
+        self,
+        targets: Sequence[Tuple[int, ...]],
+        rng: np.random.Generator,
+    ) -> Optional[List]:
         indices = []
         for target in targets:
             options = self._index_by_target.get(target)
             if not options:
                 return None
-            indices.append(self.rng.choice(options))
+            indices.append(rng.choice(options))
         return indices
 
     def _stack_images(self, images: Sequence) -> torch.Tensor:
