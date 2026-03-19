@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence, Tuple, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
 
@@ -133,6 +133,99 @@ def topographic_similarity(
         )
     upper = np.triu_indices(sem_d.shape[0], k=1)
     return spearman_correlation(sem_d[upper], obs_d[upper])
+
+
+def hoyer_sparsity(representations: np.ndarray) -> float:
+    """Average Hoyer sparsity over examples.
+
+    The per-example score is:
+        s(x) = (sqrt(n) - ||x||_1 / ||x||_2) / (sqrt(n) - 1)
+    where n is representation dimensionality.
+    """
+    z = _as_2d_array(np.asarray(representations, dtype=float))
+    n_features = z.shape[1]
+    if n_features < 2:
+        return 0.0
+
+    l1 = np.linalg.norm(z, ord=1, axis=1)
+    l2 = np.linalg.norm(z, ord=2, axis=1)
+    ratio = np.divide(l1, np.maximum(l2, 1e-12))
+    denom = np.sqrt(float(n_features)) - 1.0
+    sparsity = (np.sqrt(float(n_features)) - ratio) / max(denom, 1e-12)
+    sparsity = np.clip(sparsity, 0.0, 1.0)
+    return float(np.mean(sparsity))
+
+
+def _two_nearest_neighbor_radii(distance_matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    d = np.asarray(distance_matrix, dtype=float)
+    if d.ndim != 2 or d.shape[0] != d.shape[1]:
+        raise ValueError(f"distance_matrix must be square, got shape {d.shape}.")
+    if d.shape[0] < 3:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    d = d.copy()
+    np.fill_diagonal(d, np.inf)
+    nearest_two = np.partition(d, kth=1, axis=1)[:, :2]
+    r1 = np.minimum(nearest_two[:, 0], nearest_two[:, 1])
+    r2 = np.maximum(nearest_two[:, 0], nearest_two[:, 1])
+    valid = np.isfinite(r1) & np.isfinite(r2) & (r1 > 0) & (r2 > r1)
+    return r1[valid], r2[valid]
+
+
+def twonn_intrinsic_dimension_from_distances(
+    distance_matrix: np.ndarray,
+    fraction: float = 1.0,
+) -> float:
+    """Estimate intrinsic dimension with the TwoNN estimator from a distance matrix."""
+    if not 0 < fraction <= 1:
+        raise ValueError("fraction must be in (0, 1].")
+
+    r1, r2 = _two_nearest_neighbor_radii(distance_matrix)
+    if r1.size < 2:
+        return np.nan
+
+    mu = np.sort(r2 / r1)
+    n = mu.size
+    keep = max(2, int(np.floor(fraction * n)))
+    mu = mu[:keep]
+    x = np.log(mu)
+    f_emp = (np.arange(1, keep + 1, dtype=float) - 0.5) / keep
+    y = -np.log(np.maximum(1.0 - f_emp, 1e-12))
+    denom = np.dot(x, x)
+    if denom <= 0:
+        return np.nan
+    return float(np.dot(x, y) / denom)
+
+
+def twonn_intrinsic_dimension(
+    representations: np.ndarray,
+    metric: str = "euclidean",
+    fraction: float = 1.0,
+) -> float:
+    """Estimate TwoNN intrinsic dimension directly from representations."""
+    d = pairwise_distances(representations, metric=metric)
+    return twonn_intrinsic_dimension_from_distances(d, fraction=fraction)
+
+
+def topographic_similarity_with_twonn(
+    semantic_representations: Union[np.ndarray, Sequence],
+    observed_representations: Union[np.ndarray, Sequence],
+    semantic_metric: str = "cosine",
+    observed_metric: str = "euclidean",
+    twonn_fraction: float = 1.0,
+) -> tuple[float, float]:
+    """Compute TopSim and TwoNN ID, reusing pairwise distances for the observed space."""
+    sem_d = pairwise_distances(semantic_representations, metric=semantic_metric)
+    obs_d = pairwise_distances(observed_representations, metric=observed_metric)
+    if sem_d.shape != obs_d.shape:
+        raise ValueError(
+            "Both representations must contain the same number of examples. "
+            f"Got distance matrices {sem_d.shape} and {obs_d.shape}."
+        )
+    upper = np.triu_indices(sem_d.shape[0], k=1)
+    topsim = spearman_correlation(sem_d[upper], obs_d[upper])
+    twonn_id = twonn_intrinsic_dimension_from_distances(obs_d, fraction=twonn_fraction)
+    return topsim, twonn_id
 
 
 def parallelism_score(
