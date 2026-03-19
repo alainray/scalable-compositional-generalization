@@ -3,6 +3,7 @@ from .compositional import (
     pairwise_distances,
     parallelism_score,
     parallelism_score_categorical,
+    singular_spectrum_auc,
     singular_value_report,
     spearman_correlation,
     topographic_similarity,
@@ -20,6 +21,7 @@ __all__ = [
     'parallelism_score',
     'parallelism_score_categorical',
     'singular_value_report',
+    'singular_spectrum_auc',
     'n_components_for_variance',
 ]
 
