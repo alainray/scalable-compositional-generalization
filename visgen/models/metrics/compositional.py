@@ -213,6 +213,7 @@ class SingularValueReport:
     singular_values: np.ndarray
     explained_variance_ratio: np.ndarray
     cumulative_explained_variance_ratio: np.ndarray
+    component_fraction: np.ndarray
 
 
 def singular_value_report(representations: np.ndarray) -> SingularValueReport:
@@ -224,11 +225,37 @@ def singular_value_report(representations: np.ndarray) -> SingularValueReport:
     total = explained.sum()
     ratio = explained / total if total > 0 else np.zeros_like(explained)
     cumulative = np.cumsum(ratio)
+    component_fraction = np.arange(1, len(ratio) + 1, dtype=float) / max(len(ratio), 1)
     return SingularValueReport(
         singular_values=singular_values,
         explained_variance_ratio=ratio,
         cumulative_explained_variance_ratio=cumulative,
+        component_fraction=component_fraction,
     )
+
+
+def singular_spectrum_auc(representations: np.ndarray) -> float:
+    """Area under cumulative explained variance vs fraction of components.
+
+    Construction:
+    1) Center representations and compute SVD.
+    2) Build cumulative explained-variance ratios:
+       y_i = sum_{j<=i} ratio_j, with y_0 = 0.
+    3) Build the x-axis as fraction of components used:
+       x_i = i / k for i=0..k, where k is number of singular values.
+    4) Integrate the polyline (x_i, y_i) with the trapezoidal rule:
+       AUC = sum_{i=1..k} (x_i - x_{i-1}) * (y_i + y_{i-1}) / 2.
+
+    Returns:
+        Scalar in [0, 1]. Higher values indicate lower representational
+        complexity (variance explained with fewer components).
+    """
+    report = singular_value_report(representations)
+    x = np.concatenate(([0.0], report.component_fraction))
+    y = np.concatenate(([0.0], report.cumulative_explained_variance_ratio))
+    widths = np.diff(x)
+    heights = 0.5 * (y[1:] + y[:-1])
+    return float(np.sum(widths * heights))
 
 
 def n_components_for_variance(
