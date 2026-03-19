@@ -84,3 +84,37 @@ def test_singular_spectrum_auc_matches_hand_computation_for_rank_one_case():
     expected_auc = 5.0 / 6.0
     observed_auc = compositional_metrics.singular_spectrum_auc(z_rank_one)
     assert np.isclose(observed_auc, expected_auc)
+
+
+def test_hoyer_sparsity_distinguishes_dense_and_sparse_vectors():
+    dense = np.ones((16, 8))
+    sparse = np.zeros((16, 8))
+    sparse[:, 0] = 1.0
+
+    dense_sparsity = compositional_metrics.hoyer_sparsity(dense)
+    sparse_sparsity = compositional_metrics.hoyer_sparsity(sparse)
+
+    assert np.isclose(dense_sparsity, 0.0)
+    assert np.isclose(sparse_sparsity, 1.0)
+
+
+def test_twonn_intrinsic_dimension_is_close_for_uniform_2d_cloud():
+    rng = np.random.default_rng(42)
+    z = rng.uniform(size=(600, 2))
+    estimate = compositional_metrics.twonn_intrinsic_dimension(z, metric="euclidean")
+    assert 1.4 <= estimate <= 2.6
+
+
+def test_topographic_similarity_with_twonn_reuses_observed_distances():
+    semantic = np.array([[0.0], [1.0], [2.0], [3.0], [4.0]])
+    observed = semantic * 3.0
+
+    topsim = compositional_metrics.topographic_similarity(
+        semantic, observed, semantic_metric="euclidean", observed_metric="euclidean"
+    )
+    joint_topsim, twonn_id = compositional_metrics.topographic_similarity_with_twonn(
+        semantic, observed, semantic_metric="euclidean", observed_metric="euclidean"
+    )
+
+    assert np.isclose(topsim, joint_topsim)
+    assert np.isfinite(twonn_id)
