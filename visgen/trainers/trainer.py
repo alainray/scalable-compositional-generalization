@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from visgen.utils.general import (AverageMeter, load_checkpoint, plot_reconstructed)
 from .optimizers import get_optimizer
+from .representation_metrics import compute_representation_metrics_on_loader
 
 # brute force switch of image upload
 WRITE_IMAGES = True
@@ -49,6 +50,16 @@ class BaseTrainer:
             if key in eval_blacklist:
                 continue
             extra_eval_loaders.append((key, d_dataloaders[key]))
+        rep_metrics_cfg = self.cfg.get("representation_metrics", {})
+        if isinstance(rep_metrics_cfg, bool):
+            rep_metrics_cfg = {"enabled": rep_metrics_cfg}
+        rep_metrics_enabled = rep_metrics_cfg.get("enabled", False)
+        rep_metrics_split = rep_metrics_cfg.get("split", "val_4cases")
+        rep_metrics_split_raw = f"{rep_metrics_split}_raw"
+        rep_metrics_every = int(rep_metrics_cfg.get("every_n_epochs", 1))
+        rep_metrics_max_samples = rep_metrics_cfg.get("max_samples")
+        rep_metrics_var_threshold = float(rep_metrics_cfg.get("variance_threshold", 0.9))
+        rep_metrics_obs_metric = rep_metrics_cfg.get("observed_metric", "cosine")
         kwargs = {"dataset_size": len(train_loader.dataset)}
         selection_metric = self.cfg.selection_metric
         best_val_metric = -np.inf if "acc" in selection_metric else np.inf
@@ -183,6 +194,25 @@ class BaseTrainer:
                 best_model = ams[selection_metric].avg <= best_val_metric
 
             logams = {prefix + k: v.avg for k, v in ams.items()}
+            if (
+                rep_metrics_enabled
+                and i_epoch % max(rep_metrics_every, 1) == 0
+            ):
+                rep_metrics_loader = d_dataloaders.get(
+                    rep_metrics_split_raw, d_dataloaders.get(rep_metrics_split)
+                )
+                if rep_metrics_loader is not None:
+                    rep_metrics = compute_representation_metrics_on_loader(
+                        model=model,
+                        loader=rep_metrics_loader,
+                        device=self.device,
+                        max_samples=rep_metrics_max_samples,
+                        variance_threshold=rep_metrics_var_threshold,
+                        observed_metric=rep_metrics_obs_metric,
+                    )
+                    if rep_metrics is not None:
+                        for key, value in rep_metrics.items():
+                            logams[f"{prefix}{rep_metrics_split}_{key}"] = value
             plot_train = None
             plot_test = None
 
