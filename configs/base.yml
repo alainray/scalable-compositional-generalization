@@ -16,3 +16,8 @@ training:
     name: 'adam'
     lr: 0.0001
     weight_decay: 0.0
+  representation_metrics:
+    enabled: False
+    split: val_4cases
+    every_n_epochs: 1
+    variance_threshold: 0.9

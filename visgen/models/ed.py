@@ -37,6 +37,15 @@ class ExpDisentanglement(BaseModel):
         return output
 
     @torch.no_grad()
+    def extract_representation(self, x):
+        if x.dim() == 5:
+            x = x[:, -1]
+        if self.preprocessing is not None:
+            x = self.preprocessing(x)
+        pieces = [extractor(x) for extractor in self.feature_extractors]
+        return torch.cat(pieces, dim=1)
+
+    @torch.no_grad()
     def plot_debug(self, x, path, **kwargs):
         self.train()
         original = plot_box(
@@ -148,6 +157,12 @@ class ExpDisentanglementMixer(ExpDisentanglement):
                 x = self.preprocessing(x)
         pieces = [extractor(x) for extractor in self.feature_extractors]
         return torch.cat(pieces, dim=1)
+
+    @torch.no_grad()
+    def extract_representation(self, x):
+        if x.dim() == 5:
+            x = x[:, -1]
+        return self._encode_representations(x)
 
     def _project_rep_pieces(self, rep):
         rep_chunks = torch.split(rep, self.z_dim, dim=-1)

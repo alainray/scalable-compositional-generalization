@@ -86,6 +86,12 @@ class ResNet18Mixer(BaseModel):
                 x = self.preprocessing(x)
         return self.encoder(x)
 
+    @torch.no_grad()
+    def extract_representation(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 5:
+            x = x[:, -1]
+        return self._encode(x)
+
     def _split_logits(self, logits: torch.Tensor):
         outputs = []
         offset = 0

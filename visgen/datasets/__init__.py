@@ -244,6 +244,14 @@ def get_dataloaders(data_cfg, writer=None):
 		if apply_to:
 			if cfg.train and "validation" in apply_to:
 				datasets.append(("validation_raw", val_data))
+			if cfg.train and "val_4cases" in apply_to:
+				val_4cases_data = None
+				for split_name, split_data in datasets:
+					if split_name == "val_4cases":
+						val_4cases_data = split_data
+						break
+				if val_4cases_data is not None:
+					datasets.append(("val_4cases_raw", val_4cases_data))
 			if (not cfg.train) and "testing" in apply_to:
 				datasets.append(("testing_raw", data))
 		infos = {}

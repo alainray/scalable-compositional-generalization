@@ -38,6 +38,12 @@ class BaseModel(torch.nn.Module):
     def get_logged_metrics(self):
         return self._logged_metrics
 
+    @torch.no_grad()
+    def extract_representation(self, x):
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement extract_representation."
+        )
+
     def _compute_metrics(self, yp, y):
         metrics, att_metric = [], []
         for metric_fn in self.metric_fns:

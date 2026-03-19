@@ -90,11 +90,17 @@ class ResNet(BaseModel):
 		layers=[block(self.inplanes,planes,activation,stride,downsample,self.groups,self.base_width,previous_dilation,norm_layer,skip_init=skip_init)];self.inplanes=planes*block.expansion
 		for _ in range(1,blocks):layers.append(block(self.inplanes,planes,activation,groups=self.groups,base_width=self.base_width,dilation=self.dilation,norm_layer=norm_layer,skip_init=skip_init))
 		return nn.Sequential(*layers)
-	def forward(self,x):
+	def _forward_features(self,x):
 		if self.preprocessing is not None:
 			with torch.no_grad():x=self.preprocessing(x)
 		x=self.conv1(x);x=self.bn1(x);x=self.activation(x);x=self.maxpool(x);x=self.layer1(x);x=self.layer2(x);x=self.layer3(x);x=self.layer4(x);x=self.avgpool(x);x=torch.flatten(x,1)
 		if hasattr(self,'fc')and self.fc:x=self.fc(x)
+		return x
+	@torch.no_grad()
+	def extract_representation(self,x):
+		return self._forward_features(x)
+	def forward(self,x):
+		x=self._forward_features(x)
 		if self.head is not None:x=self.head(x)
 		if self.objective=='classification':
 			logits=[];j=0
