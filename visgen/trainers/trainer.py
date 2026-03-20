@@ -39,23 +39,26 @@ class BaseTrainer:
         )
         num_ood_sets = len(ood_val_keys)
         ood_val_loaders = [d_dataloaders[key] for key in ood_val_keys]
-        extra_eval_loaders = []
-        eval_blacklist = {
-            "training",
-            "validation",
-            "testing",
-        }
-        eval_blacklist |= set(ood_val_keys)
-        for key in sorted(d_dataloaders.keys()):
-            if key in eval_blacklist:
-                continue
-            extra_eval_loaders.append((key, d_dataloaders[key]))
         rep_metrics_cfg = self.cfg.get("representation_metrics", {})
         if isinstance(rep_metrics_cfg, bool):
             rep_metrics_cfg = {"enabled": rep_metrics_cfg}
         rep_metrics_enabled = rep_metrics_cfg.get("enabled", False)
         rep_metrics_split = rep_metrics_cfg.get("split", "val_4cases")
         rep_metrics_split_raw = f"{rep_metrics_split}_raw"
+        extra_eval_loaders = []
+        eval_blacklist = {
+            "training",
+            "validation",
+            "testing",
+            rep_metrics_split_raw,
+        }
+        if rep_metrics_enabled:
+            eval_blacklist.add(rep_metrics_split)
+        eval_blacklist |= set(ood_val_keys)
+        for key in sorted(d_dataloaders.keys()):
+            if key in eval_blacklist:
+                continue
+            extra_eval_loaders.append((key, d_dataloaders[key]))
         rep_metrics_every = int(rep_metrics_cfg.get("every_n_epochs", 1))
         rep_metrics_max_samples = rep_metrics_cfg.get("max_samples")
         rep_metrics_var_threshold = float(rep_metrics_cfg.get("variance_threshold", 0.9))

@@ -12,6 +12,8 @@ data:
     downsample: 0
     val_fraction: 0.1
     num_workers: 1
+    val_4cases:
+      enabled: True
     attributes: &ATT
       - name: orientation
         out_dim: 24
