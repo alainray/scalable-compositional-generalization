@@ -20,9 +20,18 @@ METRICS = [
     "val_acc",
     "ood_val_0_acc",
     "test_acc",
+    "val_4cases_twonn_id",
+    "val_4cases_n_components_90pct",
+    "val_4cases_topsim",
+    "val_4cases_pscore_mean",
+    "val_4cases_sv_auc",
+    "val_4cases_hoyer_sparsity",
+    "val_4cases_embedding_dim",
 ]
 
 PARSE_LOG = True
+CORE_METRICS = ["train_acc", "val_acc", "ood_val_0_acc", "test_acc"]
+FLOAT_PATTERN = r"([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
 
 
 def find_wandb_log_path(path):
@@ -82,27 +91,7 @@ def parse_training_metrics(path):
         )
     with open(log_path, "r") as file:
         log_data = file.read()
-    epoch_data = {}
-    epoch_pattern = re.compile(r"Epoch \[(\d+)\]")
-    epochs = epoch_pattern.split(log_data)
-    epochs = epochs[1:]
-    for i in range(0, len(epochs), 2):
-        epoch_num = int(epochs[i].strip())
-        epoch_content = epochs[i + 1]
-        parsed_ta = re.search(r"train_acc: ([\d.]+)", epoch_content)
-        train_acc = float(parsed_ta.group(1)) if parsed_ta else 0
-        parsed_va = re.search(r"val_acc: ([\d.]+)", epoch_content)
-        val_acc = float(parsed_va.group(1)) if parsed_va else 0
-        parsed_oa = re.search(r"ood_val_0_acc: ([\d.]+)", epoch_content)
-        ood_val_0_acc = float(parsed_oa.group(1)) if parsed_oa else 0
-        parsed_ta = re.search(r"test_acc: ([\d.]+)", epoch_content)
-        test_acc = float(parsed_ta.group(1)) if parsed_ta else 0
-        epoch_data[epoch_num] = {
-            "train_acc": train_acc,
-            "val_acc": val_acc,
-            "ood_val_0_acc": ood_val_0_acc,
-            "test_acc": test_acc,
-        }
+    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
     best_epoch_results, curves = select_best(epoch_data)
     for metric in best_epoch_results.keys():
         with open(os.path.join(path, f"results_{metric}.json"), "w") as json_file:
@@ -130,16 +119,33 @@ def process_experiment(path):
                 parsed_att = parsed_att.get(key)
             tmp[v] = parsed_att
         for m in METRICS:
-            tmp[m] = metrics[m]
+            tmp[m] = metrics.get(m, np.nan)
         extracted[eval] = tmp
     return extracted
 
 def select_best_id(train_data):
-    bests = (0,0,0,0)
+    best_epoch = None
     for v in train_data.values():
-        if v["val_acc"] >= bests[2]:
-            bests = (v["train_acc"], v["ood_val_0_acc"], v["val_acc"], v["test_acc"])
-    return bests
+        if best_epoch is None or v["val_acc"] >= best_epoch["val_acc"]:
+            best_epoch = dict(v)
+    return best_epoch or dict()
+
+
+def extract_epoch_metrics(log_data, extra_metrics=None):
+    metrics_to_parse = list(dict.fromkeys(CORE_METRICS + (extra_metrics or [])))
+    epoch_data = {}
+    epoch_pattern = re.compile(r"Epoch \[(\d+)\]")
+    epochs = epoch_pattern.split(log_data)
+    epochs = epochs[1:]
+    for i in range(0, len(epochs), 2):
+        epoch_num = int(epochs[i].strip())
+        epoch_content = epochs[i + 1]
+        parsed_metrics = {}
+        for metric in metrics_to_parse:
+            parsed = re.search(rf"{re.escape(metric)}:\s*{FLOAT_PATTERN}", epoch_content)
+            parsed_metrics[metric] = float(parsed.group(1)) if parsed else 0
+        epoch_data[epoch_num] = parsed_metrics
+    return epoch_data
 
 def parse_id(path):
     log_path = find_wandb_log_path(path)
@@ -149,34 +155,9 @@ def parse_id(path):
         )
     with open(log_path, "r") as file:
         log_data = file.read()
-    epoch_data = {}
-    epoch_pattern = re.compile(r"Epoch \[(\d+)\]")
-    epochs = epoch_pattern.split(log_data)
-    epochs = epochs[1:]
-    for i in range(0, len(epochs), 2):
-        epoch_num = int(epochs[i].strip())
-        epoch_content = epochs[i + 1]
-        parsed_ta = re.search(r"train_acc: ([\d.]+)", epoch_content)
-        train_acc = float(parsed_ta.group(1)) if parsed_ta else 0
-        parsed_va = re.search(r"val_acc: ([\d.]+)", epoch_content)
-        val_acc = float(parsed_va.group(1)) if parsed_va else 0
-        parsed_oa = re.search(r"ood_val_0_acc: ([\d.]+)", epoch_content)
-        ood_val_0_acc = float(parsed_oa.group(1)) if parsed_oa else 0
-        parsed_ta = re.search(r"test_acc: ([\d.]+)", epoch_content)
-        test_acc = float(parsed_ta.group(1)) if parsed_ta else 0
-        epoch_data[epoch_num] = {
-            "train_acc": train_acc,
-            "val_acc": val_acc,
-            "ood_val_0_acc": ood_val_0_acc,
-            "test_acc": test_acc,
-        }
+    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
     best_epoch_result = select_best_id(epoch_data)
-    return {
-        "train_acc": best_epoch_result[0],
-        "val_acc": best_epoch_result[2],
-        "ood_val_0_acc": best_epoch_result[1],
-        "test_acc": best_epoch_result[3],
-    }
+    return best_epoch_result
 
 
 
