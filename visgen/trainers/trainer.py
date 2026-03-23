@@ -5,7 +5,13 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from visgen.utils.general import (AverageMeter, load_checkpoint, plot_reconstructed)
+from visgen.utils.general import (
+    AverageMeter,
+    load_checkpoint,
+    plot_reconstructed,
+    save_checkpoint,
+    save_json,
+)
 from .optimizers import get_optimizer
 from .representation_metrics import compute_representation_metrics_on_loader
 
@@ -91,6 +97,7 @@ class BaseTrainer:
         model_last = os.path.join(savepath, "checkpoint.pth.tar")
         os.path.join(savepath, "results.json")
         force_train = self.cfg.get("if_exists", "continue")
+        checkpointing_enabled = bool(self.cfg.get("checkpointing", True))
         start_epoch = 1
 
         # Re-train model
@@ -251,6 +258,16 @@ class BaseTrainer:
                     best_test_metric = current_metric
                 best_ams[f"{prefix}best_{test_metric}"] = best_test_metric
 
+            if checkpointing_enabled:
+                save_checkpoint(
+                    model=model,
+                    epoch=i_epoch,
+                    is_best=best_model,
+                    savepath=savepath,
+                    best_ams=best_ams,
+                    optimizer=optimizer,
+                )
+
             # End of epoch, log results
             print(
                 f"Epoch [{i_epoch:d}]\n   "
@@ -260,17 +277,8 @@ class BaseTrainer:
             )
         # END TRAINING LOOP
 
-        # # load best model and save the metrics
-        # model, best_ams, _, _ = load_checkpoint(model_best, model, device=self.device)
-        # # if checkpointing is not enabled, remove best model checkpoint after loading
-        # if not self.cfg["checkpointing"]:
-        #     try:
-        #         os.remove(model_best)
-        #         os.remove(model_last)
-        #     except OSError:
-        #         pass
-        # # log results in separate json file
-        # save_json(res_path, best_ams)
+        # save metrics summary
+        save_json(os.path.join(savepath, "results.json"), best_ams)
 
         # # post-training logs
         # model.eval()
@@ -279,8 +287,7 @@ class BaseTrainer:
         #     if callable(getattr(writer, "write_images", None)) and WRITE_IMAGES:
         #         writer.write_images(images, captions)
 
-        # return model, best_ams
-        return (1,1)
+        return model, best_ams
 
 class MultiStepTrainer:
     """"""
