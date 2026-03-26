@@ -269,9 +269,15 @@ class BaseTrainer:
                 )
 
             # End of epoch, log results
+            epoch_log_lines = []
+            for k, v in sorted(logams.items()):
+                if isinstance(v, (float, int, np.floating, np.integer)):
+                    epoch_log_lines.append(f"{k}: {float(v):.6f}")
+                else:
+                    epoch_log_lines.append(f"{k}: {v}")
             print(
                 f"Epoch [{i_epoch:d}]\n   "
-                + "\n   ".join([f"{k}: {v.avg:.6f}" for k, v in ams.items()])
+                + "\n   ".join(epoch_log_lines)
                 + f"\n   elapsed: {(time.time() - start):.1f}"
                 + f"\n   best model: {best_model}"
             )
