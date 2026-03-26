@@ -14,9 +14,17 @@ data:
     num_workers: 1
     non_iid:
       name: non_iid
+      seed: ${seed}
       apply_to:
       - training
       fully_iid: true
+      deterministic: False
+      split_overrides:
+        val_4cases:
+          deterministic: True
+          precompute_deterministic: True
+          seed: 123
+
     attributes: &id001
     - name: color
       out_dim: 6

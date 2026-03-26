@@ -154,7 +154,7 @@ if __name__ == "__main__":
     fix_random(cfg.seed)
 
     # load data
-    d_dataloaders = get_dataloaders(cfg.data, writer)
+    d_dataloaders = get_dataloaders(cfg.data, writer, seed=cfg.seed)
 
     # build model
     model = get_model(cfg).to(cfg.device)
