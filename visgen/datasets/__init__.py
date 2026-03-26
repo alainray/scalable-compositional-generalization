@@ -1,3 +1,7 @@
+import random
+
+import numpy as np
+import torch
 from torch.utils.data import DataLoader, Subset, random_split
 
 from .cars3d import Cars3D
@@ -97,7 +101,7 @@ def _filter_allowed_attributes(dataset, allowed_attributes):
 	return eligible
 
 
-def _wrap_non_iid(dataset, cfg, split_name=None):
+def _wrap_non_iid(dataset, cfg, split_name=None, fallback_seed=None):
 	non_iid_cfg = _non_iid_cfg_for_split(cfg, split_name)
 	if not non_iid_cfg:
 		return dataset
@@ -115,7 +119,7 @@ def _wrap_non_iid(dataset, cfg, split_name=None):
 	return NonIIDWrapper(
 		dataset,
 		max_resample_attempts=non_iid_cfg.get("max_resample_attempts", 10_000),
-		seed=non_iid_cfg.get("seed"),
+		seed=non_iid_cfg.get("seed", fallback_seed),
 		allowed_attributes=allowed_attributes,
 		shared_other_attributes=non_iid_cfg.get("shared_other_attributes", True),
 		fully_iid=non_iid_cfg.get("fully_iid", False),
@@ -187,7 +191,13 @@ def _log_attribute_values(dataset, writer, name, cfg=None):
 	writer.write(infos)
 
 
-def get_dataloaders(data_cfg, writer=None):
+def _seed_worker(worker_id):
+	worker_seed = torch.initial_seed() % 2**32
+	np.random.seed(worker_seed)
+	random.seed(worker_seed)
+
+
+def get_dataloaders(data_cfg, writer=None, seed=None):
 	dataset_map = {
 		"dsprites": DSprites,
 		"iraven": IRAVEN,
@@ -197,7 +207,11 @@ def get_dataloaders(data_cfg, writer=None):
 		"clevr": CLEVR,
 	}
 	d_dataloaders = {}
-	for (key, cfg) in data_cfg.items():
+	for data_split_idx, (key, cfg) in enumerate(data_cfg.items()):
+		base_seed = None if seed is None else int(seed) + data_split_idx
+		split_generator = (
+			None if base_seed is None else torch.Generator().manual_seed(base_seed)
+		)
 		data = dataset_map[cfg.dataset](**cfg)
 		_log_attribute_values(data, writer, key, cfg)
 		if cfg.train:
@@ -206,7 +220,7 @@ def get_dataloaders(data_cfg, writer=None):
 			val_size = int(cfg.val_fraction * len(train_data))
 			train_size = len(train_data) - val_size
 			train_data, val_data = random_split(
-				train_data, [train_size, val_size]
+				train_data, [train_size, val_size], generator=split_generator
 			)
 			non_iid_cfg = _resolve_non_iid_cfg(cfg)
 			default_shared_other_attributes = True
@@ -270,12 +284,14 @@ def get_dataloaders(data_cfg, writer=None):
 			infos[f"{key}_volume"] = data.volume
 		writer.write(infos)
 		for (name, data) in datasets:
-			data = _wrap_non_iid(data, cfg, name)
+			data = _wrap_non_iid(data, cfg, name, fallback_seed=base_seed)
 			loader = DataLoader(
 				data,
 				batch_size=cfg.batch_size,
 				num_workers=cfg.num_workers,
 				pin_memory=True,
+				worker_init_fn=_seed_worker if base_seed is not None else None,
+				generator=split_generator,
 			)
 			d_dataloaders[name] = loader
 	return d_dataloaders

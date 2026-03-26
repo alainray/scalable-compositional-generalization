@@ -19,6 +19,7 @@ data:
     num_workers: 1
     non_iid:
       name: non_iid
+      seed: ${seed}
       apply_to: ["training", "val_4cases"]
       deterministic: False
       split_overrides:
