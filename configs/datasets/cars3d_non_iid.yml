@@ -27,7 +27,6 @@ data:
           deterministic: True
           precompute_deterministic: True
           seed: 123
-
     attributes: &ATT
       - name: orientation
         out_dim: 24
