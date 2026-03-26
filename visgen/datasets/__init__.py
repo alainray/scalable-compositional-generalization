@@ -23,6 +23,16 @@ def _resolve_non_iid_cfg(cfg):
 	return getattr(cfg, "non_iid", None)
 
 
+def _non_iid_cfg_for_split(cfg, split_name):
+	non_iid_cfg = _resolve_non_iid_cfg(cfg)
+	if not non_iid_cfg or isinstance(non_iid_cfg, str):
+		return non_iid_cfg
+	split_overrides = non_iid_cfg.get("split_overrides", {})
+	if split_name and split_name in split_overrides:
+		return {**non_iid_cfg, **split_overrides[split_name]}
+	return non_iid_cfg
+
+
 def _config_attribute_names(cfg):
 	targets = getattr(cfg, "targets", None)
 	if targets:
@@ -88,7 +98,7 @@ def _filter_allowed_attributes(dataset, allowed_attributes):
 
 
 def _wrap_non_iid(dataset, cfg, split_name=None):
-	non_iid_cfg = _resolve_non_iid_cfg(cfg)
+	non_iid_cfg = _non_iid_cfg_for_split(cfg, split_name)
 	if not non_iid_cfg:
 		return dataset
 	if isinstance(non_iid_cfg, str):
