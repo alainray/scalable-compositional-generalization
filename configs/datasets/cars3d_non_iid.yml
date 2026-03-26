@@ -20,6 +20,12 @@ data:
     non_iid:
       name: non_iid
       apply_to: ["training", "val_4cases"]
+      deterministic: False
+      split_overrides:
+        val_4cases:
+          deterministic: True
+          precompute_deterministic: True
+          seed: 123
     attributes: &ATT
       - name: orientation
         out_dim: 24
