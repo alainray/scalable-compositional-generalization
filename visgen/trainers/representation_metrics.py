@@ -42,6 +42,8 @@ def compute_representation_metrics_on_loader(
     loader,
     device,
     max_samples: Optional[int] = None,
+    pairwise_max_samples: Optional[int] = None,
+    sampling_seed: int = 0,
     variance_threshold: float = 0.9,
     observed_metric: str = "cosine",
 ):
@@ -71,20 +73,28 @@ def compute_representation_metrics_on_loader(
     z = np.concatenate(embeddings, axis=0)
     y = np.concatenate(semantics, axis=0)
 
+    z_pairwise = z
+    y_pairwise = y
+    if pairwise_max_samples is not None and pairwise_max_samples > 0 and len(z) > pairwise_max_samples:
+        rng = np.random.default_rng(sampling_seed)
+        sampled_idx = rng.choice(len(z), size=pairwise_max_samples, replace=False)
+        z_pairwise = z[sampled_idx]
+        y_pairwise = y[sampled_idx]
+
     topsim, twonn_id = topographic_similarity_with_twonn(
-        semantic_representations=y,
-        observed_representations=z,
+        semantic_representations=y_pairwise,
+        observed_representations=z_pairwise,
         semantic_metric="cosine",
         observed_metric=observed_metric,
     )
     pscore_values = []
-    for attr_idx in range(y.shape[1]):
-        if y.shape[1] == 1:
+    for attr_idx in range(y_pairwise.shape[1]):
+        if y_pairwise.shape[1] == 1:
             continue
         score = parallelism_score_categorical(
-            representations=z,
-            attribute=y[:, attr_idx],
-            contexts=np.delete(y, attr_idx, axis=1),
+            representations=z_pairwise,
+            attribute=y_pairwise[:, attr_idx],
+            contexts=np.delete(y_pairwise, attr_idx, axis=1),
         )
         if not np.isnan(score):
             pscore_values.append(score)
