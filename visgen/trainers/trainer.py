@@ -50,6 +50,9 @@ class BaseTrainer:
             rep_metrics_cfg = {"enabled": rep_metrics_cfg}
         rep_metrics_enabled = rep_metrics_cfg.get("enabled", False)
         rep_metrics_split = rep_metrics_cfg.get("split", "val_4cases")
+        rep_metrics_keep_split_metrics = rep_metrics_cfg.get(
+            "keep_split_metrics", False
+        )
         rep_metrics_split_raw = f"{rep_metrics_split}_raw"
         extra_eval_loaders = []
         eval_blacklist = {
@@ -58,7 +61,7 @@ class BaseTrainer:
             "testing",
             rep_metrics_split_raw,
         }
-        if rep_metrics_enabled:
+        if rep_metrics_enabled and not rep_metrics_keep_split_metrics:
             eval_blacklist.add(rep_metrics_split)
         eval_blacklist |= set(ood_val_keys)
         for key in sorted(d_dataloaders.keys()):
@@ -67,6 +70,8 @@ class BaseTrainer:
             extra_eval_loaders.append((key, d_dataloaders[key]))
         rep_metrics_every = int(rep_metrics_cfg.get("every_n_epochs", 1))
         rep_metrics_max_samples = rep_metrics_cfg.get("max_samples")
+        rep_metrics_pairwise_max_samples = rep_metrics_cfg.get("pairwise_max_samples")
+        rep_metrics_sampling_seed = rep_metrics_cfg.get("sampling_seed", 0)
         rep_metrics_var_threshold = float(rep_metrics_cfg.get("variance_threshold", 0.9))
         rep_metrics_obs_metric = rep_metrics_cfg.get("observed_metric", "cosine")
         kwargs = {"dataset_size": len(train_loader.dataset)}
@@ -217,6 +222,8 @@ class BaseTrainer:
                         loader=rep_metrics_loader,
                         device=self.device,
                         max_samples=rep_metrics_max_samples,
+                        pairwise_max_samples=rep_metrics_pairwise_max_samples,
+                        sampling_seed=rep_metrics_sampling_seed,
                         variance_threshold=rep_metrics_var_threshold,
                         observed_metric=rep_metrics_obs_metric,
                     )
