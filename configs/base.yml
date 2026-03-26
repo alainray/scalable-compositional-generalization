@@ -19,5 +19,9 @@ training:
   representation_metrics:
     enabled: False
     split: val_4cases
+    keep_split_metrics: False
     every_n_epochs: 1
+    max_samples: null
+    pairwise_max_samples: null
+    sampling_seed: 0
     variance_threshold: 0.9
