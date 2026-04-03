@@ -6,7 +6,7 @@ experiment=$2
 model=${3:-"all"} # default to "all" if not provided
 
 # set number of experiment repetitions
-SEEDS=(1 2 3)
+SEEDS=(1 2 3 4 5)
 split=general_composition
 
 # DSPRITES
@@ -71,7 +71,7 @@ for c in "${C[@]}"; do
             data.training.targets=$split_attributes data.training.split_attributes=$split_attributes \
             data.training.split=$split --seed=$seed  data.training.c=$c data.testing.c=$c logger.name=base \
             data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty data.training.num_workers=0 data.testing.num_workers=0 \
-            logger.name=wandb
+            logger.name=wandb path.base=~/storage/investigacion/licg/scalable-compositional-generalization/out
         done
     done
 done
