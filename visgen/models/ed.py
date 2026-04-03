@@ -223,6 +223,8 @@ class ExpDisentanglementMixer(ExpDisentanglement):
                         term_loss = term_loss + mixer_cls_loss
                     mixer_terms.append(term_loss)
                 mixer_loss = torch.stack(mixer_terms).mean()
+                if torch.isnan(mixer_loss):
+                    mixer_loss = torch.zeros_like(mixer_loss)
             return cls_loss, mixer_loss, log_dict
         reps = self._encode_representations(x)
         cls_loss, log_dict = self._compute_classification(reps, y)
