@@ -322,6 +322,8 @@ class SplitResNet18Mixer(SplitResNet18):
                         term_loss = term_loss + mixer_cls_loss
                     mixer_terms.append(term_loss)
                 mixer_loss = torch.stack(mixer_terms).mean()
+                if torch.isnan(mixer_loss):
+                    mixer_loss = torch.zeros_like(mixer_loss)
             return cls_loss, mixer_loss, log_dict
 
         x_split, reps, _ = self._encode_split(x)
