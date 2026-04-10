@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import warnings
 from typing import Optional
 
 from visgen.models.metrics import (
@@ -47,6 +48,19 @@ def compute_representation_metrics_on_loader(
     variance_threshold: float = 0.9,
     observed_metric: str = "cosine",
 ):
+    placeholder_metric_value = -100
+
+    def _safe_compute(metric_name, compute_fn, placeholder=placeholder_metric_value):
+        try:
+            return compute_fn()
+        except Exception as exc:
+            warnings.warn(
+                f"Failed to compute representation metric '{metric_name}': {exc}. "
+                f"Using placeholder value {placeholder}.",
+                RuntimeWarning,
+            )
+            return placeholder
+
     embeddings = []
     semantics = []
     n_samples = 0
@@ -81,20 +95,27 @@ def compute_representation_metrics_on_loader(
         z_pairwise = z[sampled_idx]
         y_pairwise = y[sampled_idx]
 
-    topsim, twonn_id = topographic_similarity_with_twonn(
-        semantic_representations=y_pairwise,
-        observed_representations=z_pairwise,
-        semantic_metric="cosine",
-        observed_metric=observed_metric,
+    topsim, twonn_id = _safe_compute(
+        "topsim_twonn_id",
+        lambda: topographic_similarity_with_twonn(
+            semantic_representations=y_pairwise,
+            observed_representations=z_pairwise,
+            semantic_metric="cosine",
+            observed_metric=observed_metric,
+        ),
+        placeholder=(placeholder_metric_value, placeholder_metric_value),
     )
     pscore_values = []
     for attr_idx in range(y_pairwise.shape[1]):
         if y_pairwise.shape[1] == 1:
             continue
-        score = parallelism_score_categorical(
-            representations=z_pairwise,
-            attribute=y_pairwise[:, attr_idx],
-            contexts=np.delete(y_pairwise, attr_idx, axis=1),
+        score = _safe_compute(
+            f"pscore_attr_{attr_idx}",
+            lambda attr_idx=attr_idx: parallelism_score_categorical(
+                representations=z_pairwise,
+                attribute=y_pairwise[:, attr_idx],
+                contexts=np.delete(y_pairwise, attr_idx, axis=1),
+            ),
         )
         if not np.isnan(score):
             pscore_values.append(score)
@@ -105,9 +126,16 @@ def compute_representation_metrics_on_loader(
         "topsim": float(topsim),
         "pscore_mean": float(pscore_mean),
         "twonn_id": float(twonn_id),
-        "hoyer_sparsity": float(hoyer_sparsity(z)),
-        "sv_auc": float(singular_spectrum_auc(z)),
+        "hoyer_sparsity": float(
+            _safe_compute("hoyer_sparsity", lambda: hoyer_sparsity(z))
+        ),
+        "sv_auc": float(_safe_compute("sv_auc", lambda: singular_spectrum_auc(z))),
         "n_components_90pct": int(
-            n_components_for_variance(z, variance_threshold=variance_threshold)
+            _safe_compute(
+                "n_components_90pct",
+                lambda: n_components_for_variance(
+                    z, variance_threshold=variance_threshold
+                ),
+            )
         ),
     }
