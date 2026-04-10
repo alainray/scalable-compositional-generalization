@@ -96,6 +96,8 @@ def build_repr_curves_dataframe(path: str, experiment: str, dataset: str, split:
 
                 for run_path in run_dirs:
                     seed = os.path.basename(run_path)
+                    if find_wandb_log_path(run_path) is None:
+                        continue
                     try:
                         run_df = parse_run_repr_by_epoch(run_path, metrics=metrics)
                     except Exception as exc:
