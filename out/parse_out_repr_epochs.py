@@ -22,19 +22,34 @@ REPR_METRICS = [
 
 
 def find_wandb_log_path(path: str) -> str | None:
-    latest_run = os.path.join(path, "wandb", "latest-run", "files", "output.log")
-    if os.path.exists(latest_run):
-        return latest_run
+    """Find output.log in common wandb layouts.
 
-    wandb_root = os.path.join(path, "wandb")
-    if not os.path.isdir(wandb_root):
-        return None
-
-    run_dirs = sorted([entry.path for entry in os.scandir(wandb_root) if entry.is_dir()])
-    for run_dir in reversed(run_dirs):
-        candidate = os.path.join(run_dir, "files", "output.log")
+    Supports:
+    - <run>/wandb/latest-run/files/output.log
+    - <run>/wandb/run-*/files/output.log
+    - Any nested output.log under <run> (fallback for custom layouts)
+    """
+    direct_candidates = [
+        os.path.join(path, "wandb", "latest-run", "files", "output.log"),
+        os.path.join(path, "output.log"),
+        os.path.join(path, "wandb", "output.log"),
+    ]
+    for candidate in direct_candidates:
         if os.path.exists(candidate):
             return candidate
+
+    wandb_root = os.path.join(path, "wandb")
+    search_roots = [wandb_root] if os.path.isdir(wandb_root) else [path]
+
+    for search_root in search_roots:
+        found_logs: list[str] = []
+        for root, _, files in os.walk(search_root):
+            if "output.log" in files:
+                found_logs.append(os.path.join(root, "output.log"))
+        if found_logs:
+            # Prefer the most recently modified output.log.
+            return max(found_logs, key=os.path.getmtime)
+
     return None
 
 
@@ -78,12 +93,19 @@ def build_repr_curves_dataframe(path: str, experiment: str, dataset: str, split:
     if split:
         base_path = os.path.join(base_path, split)
 
+    if not os.path.isdir(base_path):
+        raise FileNotFoundError(
+            f"Base path does not exist: {base_path}. "
+            "Check --path/--experiment/--dataset/--split."
+        )
+
     c_dirs = [f.path for f in os.scandir(base_path) if f.is_dir()]
     all_rows = []
 
     for c_path in c_dirs:
         c_name = os.path.basename(c_path)
-        c_value = c_name.split("_")[-1] if c_name.startswith("composition_") else c_name
+        composition_match = re.search(r"composition_(.+)$", c_name)
+        c_value = composition_match.group(1) if composition_match else c_name
 
         model_dirs = [f.path for f in os.scandir(c_path) if f.is_dir()]
         for model_path in model_dirs:
@@ -142,7 +164,12 @@ def parse_args():
     )
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--path", type=str, default="out/")
-    parser.add_argument("--experiment", type=str, default="orthotopic")
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="metrics",
+        help="Carpeta del experimento dentro de --path (ej.: metrics, orthotopic).",
+    )
     parser.add_argument(
         "--split",
         type=str,
