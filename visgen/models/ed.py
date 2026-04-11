@@ -221,10 +221,12 @@ class ExpDisentanglementMixer(ExpDisentanglement):
                         mixer_logits = self._logits_from_rep(mixed_rep)
                         mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, target_idx, :])
                         term_loss = term_loss + mixer_cls_loss
-                    mixer_terms.append(term_loss)
-                mixer_loss = torch.stack(mixer_terms).mean()
-                if torch.isnan(mixer_loss):
-                    mixer_loss = torch.zeros_like(mixer_loss)
+                    if torch.isfinite(term_loss):
+                        mixer_terms.append(term_loss)
+                if mixer_terms:
+                    mixer_loss = torch.stack(mixer_terms).mean()
+                    if not torch.isfinite(mixer_loss):
+                        mixer_loss = torch.zeros_like(mixer_loss)
             return cls_loss, mixer_loss, log_dict
         reps = self._encode_representations(x)
         cls_loss, log_dict = self._compute_classification(reps, y)
@@ -245,15 +247,17 @@ class ExpDisentanglementMixer(ExpDisentanglement):
             with torch.amp.autocast("cuda"):
                 cls_loss, mixer_loss, log_dict = self._compute_losses(x, y)
                 total_loss = cls_loss + self.mixer_loss_weight * mixer_loss
-            amp_scaler.scale(total_loss / scaled_loss_divisor).backward()
+            if torch.isfinite(total_loss):
+                amp_scaler.scale(total_loss / scaled_loss_divisor).backward()
+                if step_optimizer:
+                    total_grad_norm = torch.nn.utils.clip_grad_norm_(
+                        self.parameters(), max_norm=1e3
+                    )
+                    if total_grad_norm.isfinite:
+                        amp_scaler.step(optimizer)
+                        amp_scaler.update()
             if step_optimizer:
-                total_grad_norm = torch.nn.utils.clip_grad_norm_(
-                    self.parameters(), max_norm=1e3
-                )
-                if total_grad_norm.isfinite:
-                    amp_scaler.step(optimizer)
-                    amp_scaler.update()
-                    optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad(set_to_none=True)
             log_dict["mixer_loss"] = mixer_loss.item()
             log_dict["total_loss"] = total_loss.item()
             return log_dict
