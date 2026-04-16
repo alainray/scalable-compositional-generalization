@@ -64,7 +64,7 @@ def select_best(train_data):
         "id": val_metric,
         "ood": ood_metric,
         "wio": wio_metric,
-        "oracle": oracle_metric
+        "oracle": oracle_metric,
     }
     bests = defaultdict(tuple)
     all = []
@@ -82,6 +82,44 @@ def select_best(train_data):
     return bests, np.array(all)
 
 
+def _select_best_lexicographic(train_data, secondary_metric, maximize_secondary=True):
+    best_epoch = None
+    best_key = None
+    for v in train_data.values():
+        val_acc = v.get("val_acc", 0)
+        sec_val = v.get(secondary_metric, 0)
+        sec_rank = sec_val if maximize_secondary else -sec_val
+        curr_key = (val_acc, sec_rank)
+        if best_key is None or curr_key >= best_key:
+            best_key = curr_key
+            best_epoch = dict(v)
+    return best_epoch or dict()
+
+
+def select_best_val_acc_pscore(train_data):
+    return _select_best_lexicographic(
+        train_data,
+        secondary_metric="val_4cases_pscore_mean",
+        maximize_secondary=True,
+    )
+
+
+def select_best_val_acc_sv_auc(train_data):
+    return _select_best_lexicographic(
+        train_data,
+        secondary_metric="val_4cases_sv_auc",
+        maximize_secondary=True,
+    )
+
+
+def select_best_val_acc_hoyer(train_data):
+    return _select_best_lexicographic(
+        train_data,
+        secondary_metric="val_4cases_hoyer_sparsity",
+        maximize_secondary=False,
+    )
+
+
 
 def parse_training_metrics(path):
     log_path = find_wandb_log_path(path)
@@ -93,6 +131,9 @@ def parse_training_metrics(path):
         log_data = file.read()
     epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
     best_epoch_results, curves = select_best(epoch_data)
+    best_epoch_results["id_pscore"] = select_best_val_acc_pscore(epoch_data)
+    best_epoch_results["id_sv_auc"] = select_best_val_acc_sv_auc(epoch_data)
+    best_epoch_results["id_hoyer"] = select_best_val_acc_hoyer(epoch_data)
     for metric in best_epoch_results.keys():
         with open(os.path.join(path, f"results_{metric}.json"), "w") as json_file:
             json.dump(dict(best_epoch_results[metric]), json_file, indent=4)
@@ -120,7 +161,7 @@ def process_experiment(path):
         with open(cfg_file_path, 'r') as file:
             cfg = yaml.safe_load(file) or {}
 
-    for eval in ["id", "ood", "wio", "oracle"]:
+    for eval in ["id", "ood", "wio", "oracle", "id_pscore", "id_sv_auc", "id_hoyer"]:
         # read files
         res_file_path = os.path.join(path, f"results_{eval}.json")
         with open(res_file_path, 'r') as file:
@@ -169,6 +210,42 @@ def parse_id(path):
     epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
     best_epoch_result = select_best_id(epoch_data)
     return best_epoch_result
+
+
+def parse_id_pscore(path):
+    log_path = find_wandb_log_path(path)
+    if log_path is None:
+        raise FileNotFoundError(
+            f"No output.log found under {os.path.join(path, 'wandb')}"
+        )
+    with open(log_path, "r") as file:
+        log_data = file.read()
+    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    return select_best_val_acc_pscore(epoch_data)
+
+
+def parse_id_sv_auc(path):
+    log_path = find_wandb_log_path(path)
+    if log_path is None:
+        raise FileNotFoundError(
+            f"No output.log found under {os.path.join(path, 'wandb')}"
+        )
+    with open(log_path, "r") as file:
+        log_data = file.read()
+    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    return select_best_val_acc_sv_auc(epoch_data)
+
+
+def parse_id_hoyer(path):
+    log_path = find_wandb_log_path(path)
+    if log_path is None:
+        raise FileNotFoundError(
+            f"No output.log found under {os.path.join(path, 'wandb')}"
+        )
+    with open(log_path, "r") as file:
+        log_data = file.read()
+    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    return select_best_val_acc_hoyer(epoch_data)
 
 
 
@@ -221,7 +298,7 @@ def parse_args():
         "--selection",
         type=str,
         default="id",
-        choices=["id", "ood", "wio", "oracle"],
+        choices=["id", "ood", "wio", "oracle", "id_pscore", "id_sv_auc", "id_hoyer"],
         help="Model selection criterion used to build the output dataframe",
     )
     return parser.parse_known_args()
@@ -318,6 +395,9 @@ def main():
     args, uknw = parse_args()
     selection_to_fn = {
         "id": parse_id,
+        "id_pscore": parse_id_pscore,
+        "id_sv_auc": parse_id_sv_auc,
+        "id_hoyer": parse_id_hoyer,
     }
     parse_result_fn = selection_to_fn.get(args.selection)
     df = pd.DataFrame(columns=list(CFG_TO_COL.values())+METRICS)
