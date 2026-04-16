@@ -98,26 +98,37 @@ def parse_training_metrics(path):
             json.dump(dict(best_epoch_results[metric]), json_file, indent=4)
     return curves
 
+def _safe_nested_get(data, dotted_key):
+    if not isinstance(data, dict):
+        return np.nan
+    parsed_att = data
+    for key in dotted_key.split("."):
+        if not isinstance(parsed_att, dict):
+            return np.nan
+        parsed_att = parsed_att.get(key, np.nan)
+    return parsed_att
+
+
 def process_experiment(path):
     """
     Read experiment files and extract results
     """
     extracted = dict()
+    cfg_file_path = os.path.join(path, "cfg.yml")
+    cfg = {}
+    if os.path.exists(cfg_file_path):
+        with open(cfg_file_path, 'r') as file:
+            cfg = yaml.safe_load(file) or {}
+
     for eval in ["id", "ood", "wio", "oracle"]:
         # read files
         res_file_path = os.path.join(path, f"results_{eval}.json")
-        cfg_file_path = os.path.join(path, "cfg.yml")
         with open(res_file_path, 'r') as file:
             metrics = json.load(file)
-        with open(cfg_file_path, 'r') as file:
-            cfg = yaml.safe_load(file)
+
         tmp = dict()
         for k, v in CFG_TO_COL.items():
-            keys = k.split(".")
-            parsed_att = cfg
-            for key in keys:
-                parsed_att = parsed_att.get(key)
-            tmp[v] = parsed_att
+            tmp[v] = _safe_nested_get(cfg, k)
         for m in METRICS:
             tmp[m] = metrics.get(m, np.nan)
         extracted[eval] = tmp
