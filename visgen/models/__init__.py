@@ -56,10 +56,11 @@ def get_resnet_mixer(**cfg):
 	activation=get_activation(model_cfg['activation'])if 'activation'in model_cfg else None
 	encoder=ResNet18(pretrained=model_cfg['pretrained'],in_channels=in_chan,out_dim=emb_dim,preprocessing=None,head=None,objective=None,attribute_sizes=None,activation=activation,maxpool=model_cfg.get('maxpool',1))
 	mixer_cfg=model_cfg.get('mixer',{})
+	mixer_mode=mixer_cfg.get('mode','transformer')
 	mixer_hidden_dim=mixer_cfg.get('rep_piece_dim',mixer_cfg.get('rep_dim',None))
-	mixer=RepresentationMixer(emb_dim=mixer_hidden_dim if mixer_hidden_dim is not None else emb_dim,num_layers=mixer_cfg.get('num_layers',2),num_heads=mixer_cfg.get('num_heads',4),dropout=mixer_cfg.get('dropout',0.0))
+	mixer=None if mixer_mode=='algebraic' else RepresentationMixer(emb_dim=mixer_hidden_dim if mixer_hidden_dim is not None else emb_dim,num_layers=mixer_cfg.get('num_layers',2),num_heads=mixer_cfg.get('num_heads',4),dropout=mixer_cfg.get('dropout',0.0))
 	classifier=get_net(in_dim=emb_dim,out_dim=out_dim,arch='fc_vec',l_hidden=[],activation=[],out_activation=out_activation)
-	return ResNet18Mixer(encoder=encoder,mixer=mixer,classifier=classifier,preprocessing=preprocessing,attributes=attribute_names,attribute_sizes=attribute_sizes,objective=objective,loss_fn=loss,metric_fns=metrics,mixer_loss_weight=mixer_cfg.get('loss_weight',1.0),mixer_detach_target=mixer_cfg.get('detach_target',False),use_mixer_classifier=mixer_cfg.get('use_classifier',False),use_all_mixer_cases=mixer_cfg.get('use_all_cases',False),mixer_rep_dim=mixer_cfg.get('rep_dim',None),mixer_rep_piece_dim=mixer_cfg.get('rep_piece_dim',None))
+	return ResNet18Mixer(encoder=encoder,mixer=mixer,classifier=classifier,preprocessing=preprocessing,attributes=attribute_names,attribute_sizes=attribute_sizes,objective=objective,loss_fn=loss,metric_fns=metrics,mixer_loss_weight=mixer_cfg.get('loss_weight',1.0),mixer_detach_target=mixer_cfg.get('detach_target',False),use_mixer_classifier=mixer_cfg.get('use_classifier',False),use_all_mixer_cases=mixer_cfg.get('use_all_cases',False),mixer_mode=mixer_mode,algebraic_use_all_terms=mixer_cfg.get('algebraic_use_all_terms',True),mixer_rep_dim=mixer_cfg.get('rep_dim',None),mixer_rep_piece_dim=mixer_cfg.get('rep_piece_dim',None))
 def get_neuro_sym(**cfg):
 	model_cfg=cfg['model'];arch=model_cfg['arch'];model_cfg['feature_extraction']['in_channels'];z_dim=model_cfg['z_dim'];cb_path=os.path.join(model_cfg['path'],'codebooks');att_names,att_size,att_var=_get_attribute_info(cfg);preprocessing=_get_preprocessing(model_cfg.pop('preprocessing'));loss=get_loss(cfg['training']['loss']);objective=cfg['training']['objective'];metrics=get_metrics(cfg['training']['metrics'])
 	if arch!='ed':raise ValueError(f"Architecture {arch} not supported")

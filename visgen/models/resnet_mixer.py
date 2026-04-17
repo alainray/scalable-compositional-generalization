@@ -46,6 +46,8 @@ class ResNet18Mixer(BaseModel):
         mixer_detach_target: bool = False,
         use_mixer_classifier: bool = False,
         use_all_mixer_cases: bool = False,
+        mixer_mode: str = "transformer",
+        algebraic_use_all_terms: bool = True,
         mixer_rep_dim: int = None,
         mixer_rep_piece_dim: int = None,
         *args,
@@ -61,6 +63,8 @@ class ResNet18Mixer(BaseModel):
         self.mixer_detach_target = mixer_detach_target
         self.use_mixer_classifier = use_mixer_classifier
         self.use_all_mixer_cases = use_all_mixer_cases
+        self.mixer_mode = mixer_mode
+        self.algebraic_use_all_terms = algebraic_use_all_terms
         if mixer_rep_piece_dim is not None:
             mixer_hidden_dim = mixer_rep_piece_dim
         elif mixer_rep_dim is not None:
@@ -130,36 +134,50 @@ class ResNet18Mixer(BaseModel):
             reps = reps_flat.view(batch_size, num_views, -1)
             cls_loss, log_dict = self._compute_classification(reps_flat, y)
             mixer_loss = torch.tensor(0.0, device=reps.device)
-            if self.mixer is not None and num_views >= 4:
-                if self.use_all_mixer_cases:
-                    case_specs = [
-                        (3, [0, 1, 2]),
-                        (0, [2, 1, 0]),
-                        (1, [2, 3, 0]),
-                        (2, [1, 0, 3]),
-                    ]
-                else:
-                    case_specs = [(3, [0, 1, 2])]
-                mixer_terms = []
-                for target_idx, input_indices in case_specs:
-                    mixer_inputs = reps[:, input_indices, :]
-                    target_rep = reps[:, target_idx, :]
-                    if self.mixer_detach_target:
-                        target_rep = target_rep.detach()
-                    mixed_rep = self.mixer_input_projection(mixer_inputs)
-                    mixed_rep = self.mixer(mixed_rep)
-                    mixed_rep = self.mixer_output_projection(mixed_rep)
-                    term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
-                    if self.use_mixer_classifier and y is not None and y.dim() > 2:
-                        mixer_logits = self._classifier_outputs(mixed_rep)
-                        mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, target_idx, :])
-                        term_loss = term_loss + mixer_cls_loss
-                    if torch.isfinite(term_loss):
-                        mixer_terms.append(term_loss)
-                if mixer_terms:
-                    mixer_loss = torch.stack(mixer_terms).mean()
-                    if not torch.isfinite(mixer_loss):
-                        mixer_loss = torch.zeros_like(mixer_loss)
+            if num_views >= 4:
+                if self.mixer_mode == "algebraic":
+                    rep_ac = reps[:, 0, :]
+                    rep_ad = reps[:, 1, :]
+                    rep_bc = reps[:, 2, :]
+                    rep_bd = reps[:, 3, :]
+                    residual = rep_ac - rep_ad - rep_bc + rep_bd
+                    algebraic_loss = (residual.pow(2)).mean()
+                    if self.algebraic_use_all_terms:
+                        mixer_loss = 4.0 * algebraic_loss
+                    else:
+                        mixer_loss = algebraic_loss
+                elif self.mixer is not None:
+                    if self.use_all_mixer_cases:
+                        case_specs = [
+                            (3, [0, 1, 2]),
+                            (0, [2, 1, 0]),
+                            (1, [2, 3, 0]),
+                            (2, [1, 0, 3]),
+                        ]
+                    else:
+                        case_specs = [(3, [0, 1, 2])]
+                    mixer_terms = []
+                    for target_idx, input_indices in case_specs:
+                        mixer_inputs = reps[:, input_indices, :]
+                        target_rep = reps[:, target_idx, :]
+                        if self.mixer_detach_target:
+                            target_rep = target_rep.detach()
+                        mixed_rep = self.mixer_input_projection(mixer_inputs)
+                        mixed_rep = self.mixer(mixed_rep)
+                        mixed_rep = self.mixer_output_projection(mixed_rep)
+                        term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
+                        if self.use_mixer_classifier and y is not None and y.dim() > 2:
+                            mixer_logits = self._classifier_outputs(mixed_rep)
+                            mixer_cls_loss, _ = self.loss_fn(
+                                mixer_logits, y[:, target_idx, :]
+                            )
+                            term_loss = term_loss + mixer_cls_loss
+                        if torch.isfinite(term_loss):
+                            mixer_terms.append(term_loss)
+                    if mixer_terms:
+                        mixer_loss = torch.stack(mixer_terms).mean()
+                if not torch.isfinite(mixer_loss):
+                    mixer_loss = torch.zeros_like(mixer_loss)
             return cls_loss, mixer_loss, log_dict
         reps_flat = self._encode(x)
         cls_loss, log_dict = self._compute_classification(reps_flat, y)
