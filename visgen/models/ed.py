@@ -100,6 +100,8 @@ class ExpDisentanglementMixer(ExpDisentanglement):
         mixer_detach_target: bool = False,
         use_mixer_classifier: bool = False,
         use_all_mixer_cases: bool = False,
+        mixer_mode: str = "transformer",
+        algebraic_use_all_terms: bool = True,
         *args,
         **kwargs,
     ):
@@ -135,11 +137,17 @@ class ExpDisentanglementMixer(ExpDisentanglement):
         self.mixer_output_projection = (
             nn.Identity() if mixer_dim == rep_dim else nn.Linear(mixer_dim, rep_dim)
         )
-        self.mixer = RepresentationMixer(
-            emb_dim=mixer_dim,
-            num_layers=mixer_num_layers,
-            num_heads=mixer_num_heads,
-            dropout=mixer_dropout,
+        self.mixer_mode = mixer_mode
+        self.algebraic_use_all_terms = algebraic_use_all_terms
+        self.mixer = (
+            None
+            if mixer_mode == "algebraic"
+            else RepresentationMixer(
+                emb_dim=mixer_dim,
+                num_layers=mixer_num_layers,
+                num_heads=mixer_num_heads,
+                dropout=mixer_dropout,
+            )
         )
         self.mixer_loss_fn = nn.MSELoss()
         self.mixer_loss_weight = mixer_loss_weight
@@ -198,35 +206,49 @@ class ExpDisentanglementMixer(ExpDisentanglement):
             reps = reps_flat.view(batch_size, num_views, -1)
             mixer_loss = torch.tensor(0.0, device=reps.device)
             if num_views >= 4:
-                if self.use_all_mixer_cases:
-                    case_specs = [
-                        (3, [0, 1, 2]),
-                        (0, [2, 1, 0]),
-                        (1, [2, 3, 0]),
-                        (2, [1, 0, 3]),
-                    ]
+                if self.mixer_mode == "algebraic":
+                    rep_ac = reps[:, 0, :]
+                    rep_ad = reps[:, 1, :]
+                    rep_bc = reps[:, 2, :]
+                    rep_bd = reps[:, 3, :]
+                    residual = rep_ac - rep_ad - rep_bc + rep_bd
+                    algebraic_loss = (residual.pow(2)).mean()
+                    if self.algebraic_use_all_terms:
+                        mixer_loss = 4.0 * algebraic_loss
+                    else:
+                        mixer_loss = algebraic_loss
                 else:
-                    case_specs = [(3, [0, 1, 2])]
-                mixer_terms = []
-                for target_idx, input_indices in case_specs:
-                    mixer_inputs = reps[:, input_indices, :]
-                    target_rep = reps[:, target_idx, :]
-                    if self.mixer_detach_target:
-                        target_rep = target_rep.detach()
-                    mixed_rep = self._project_rep_pieces(mixer_inputs)
-                    mixed_rep = self.mixer(mixed_rep)
-                    mixed_rep = self.mixer_output_projection(mixed_rep)
-                    term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
-                    if self.use_mixer_classifier and y is not None and y.dim() > 2:
-                        mixer_logits = self._logits_from_rep(mixed_rep)
-                        mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, target_idx, :])
-                        term_loss = term_loss + mixer_cls_loss
-                    if torch.isfinite(term_loss):
-                        mixer_terms.append(term_loss)
-                if mixer_terms:
-                    mixer_loss = torch.stack(mixer_terms).mean()
-                    if not torch.isfinite(mixer_loss):
-                        mixer_loss = torch.zeros_like(mixer_loss)
+                    if self.use_all_mixer_cases:
+                        case_specs = [
+                            (3, [0, 1, 2]),
+                            (0, [2, 1, 0]),
+                            (1, [2, 3, 0]),
+                            (2, [1, 0, 3]),
+                        ]
+                    else:
+                        case_specs = [(3, [0, 1, 2])]
+                    mixer_terms = []
+                    for target_idx, input_indices in case_specs:
+                        mixer_inputs = reps[:, input_indices, :]
+                        target_rep = reps[:, target_idx, :]
+                        if self.mixer_detach_target:
+                            target_rep = target_rep.detach()
+                        mixed_rep = self._project_rep_pieces(mixer_inputs)
+                        mixed_rep = self.mixer(mixed_rep)
+                        mixed_rep = self.mixer_output_projection(mixed_rep)
+                        term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
+                        if self.use_mixer_classifier and y is not None and y.dim() > 2:
+                            mixer_logits = self._logits_from_rep(mixed_rep)
+                            mixer_cls_loss, _ = self.loss_fn(
+                                mixer_logits, y[:, target_idx, :]
+                            )
+                            term_loss = term_loss + mixer_cls_loss
+                        if torch.isfinite(term_loss):
+                            mixer_terms.append(term_loss)
+                    if mixer_terms:
+                        mixer_loss = torch.stack(mixer_terms).mean()
+                if not torch.isfinite(mixer_loss):
+                    mixer_loss = torch.zeros_like(mixer_loss)
             return cls_loss, mixer_loss, log_dict
         reps = self._encode_representations(x)
         cls_loss, log_dict = self._compute_classification(reps, y)
