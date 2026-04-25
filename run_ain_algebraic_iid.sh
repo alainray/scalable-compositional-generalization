@@ -9,12 +9,12 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --mem=30G
+#SBATCH --mem=50G
 # Activar entorno si es necesario
 source ~/storage/torch/bin/activate
 cd ~/investigacion/scalable-compositional-generalization
 
-WANDB_DEBUG=1,WANDB_SILENT=false ./ain_mixer_nomixer_iid_runner.sh $ds comp_ablation_iid
+WANDB_DEBUG=1,WANDB_SILENT=false ./ain_algebraic_iid_runner.sh $ds comp_ablation_iid
 wait
 
 echo "Finished with job $SLURM_JOBID (seed=$SEED)"
