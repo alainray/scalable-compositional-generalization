@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 from omegaconf import OmegaConf
+import torch
+from torch.utils.data import random_split
 
 from visgen.datasets import CLEVR, Shapes3D, IRAVEN
 from visgen.datasets.non_iid import subset_with_four_case_support
@@ -39,9 +41,23 @@ def main():
 
     ds = _build_training_dataset(train_cfg)
 
-    total = len(ds)
+    # Mirror the real train/validation split used by get_dataloaders so this
+    # script measures support on the actual training subset (excluding val).
+    base_seed = int(cfg.seed) if "seed" in cfg and cfg.seed is not None else None
+    split_generator = (
+        None if base_seed is None else torch.Generator().manual_seed(base_seed)
+    )
+    num_ood_val = train_cfg.num_ood_val if "num_ood_val" in train_cfg else 1
+    train_data, _ = ds.ood_validation_split(num_ood_val)
+    val_size = int(train_cfg.val_fraction * len(train_data))
+    train_size = len(train_data) - val_size
+    train_data, _ = random_split(
+        train_data, [train_size, val_size], generator=split_generator
+    )
+
+    total = len(train_data)
     support_subset = subset_with_four_case_support(
-        ds,
+        train_data,
         allowed_attributes=None,
         shared_other_attributes=args.shared_other_attributes,
     )
@@ -51,6 +67,7 @@ def main():
     print("=== non-iid 4-corner support analysis ===")
     print(f"dataset: {args.dataset}")
     print(f"config:  {Path(args.config)}")
+    print("analyzed_split: train (post ood_validation_split + val_fraction split)")
     print(f"total_samples:        {total}")
     print(f"supported_samples:    {supported}")
     print(f"unsupported_samples:  {unsupported}")
