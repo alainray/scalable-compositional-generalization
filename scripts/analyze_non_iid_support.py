@@ -14,6 +14,7 @@ from torch.utils.data import random_split
 
 from visgen.datasets import CLEVR, Shapes3D, IRAVEN
 from visgen.datasets.non_iid import subset_with_four_case_support
+from visgen.datasets.splits import training_subset_with_optional_ood_holdout
 
 DATASET_MAP = {
     "clevr": CLEVR,
@@ -25,12 +26,6 @@ DATASET_MAP = {
 def _build_training_dataset(cfg):
     cls = DATASET_MAP[cfg.dataset]
     return cls(**cfg)
-
-
-def _supports_ood_validation_split(dataset) -> bool:
-    return hasattr(dataset, "_included_combinations") and hasattr(
-        dataset, "_split_attribute_indices"
-    )
 
 
 def main():
@@ -54,7 +49,9 @@ def main():
         None if base_seed is None else torch.Generator().manual_seed(base_seed)
     )
     num_ood_val = train_cfg.num_ood_val if "num_ood_val" in train_cfg else 1
-    train_data, _ = ds.ood_validation_split(num_ood_val)
+    train_data = training_subset_with_optional_ood_holdout(
+        ds, num_ood_val=num_ood_val
+    )
     val_size = int(train_cfg.val_fraction * len(train_data))
     train_size = len(train_data) - val_size
     train_data, _ = random_split(
