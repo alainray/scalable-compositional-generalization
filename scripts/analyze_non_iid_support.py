@@ -27,6 +27,12 @@ def _build_training_dataset(cfg):
     return cls(**cfg)
 
 
+def _supports_ood_validation_split(dataset) -> bool:
+    return hasattr(dataset, "_included_combinations") and hasattr(
+        dataset, "_split_attribute_indices"
+    )
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", choices=sorted(DATASET_MAP), required=True)
