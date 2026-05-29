@@ -1,0 +1,74 @@
+data:
+  training:
+    dataset: clevr
+    path: data/CLEVR
+    targets:
+    split_attributes:
+    split: composition
+    split_difficulty: 0.1
+    train: True
+    shuffle: True
+    batch_size: 1024
+    downsample: 0
+    val_fraction: 0.1
+    val_4cases:
+      enabled: True
+      replace_validation: False
+      export_split: True
+
+    num_workers: 0
+    non_iid:
+      name: non_iid
+      seed: ${seed}
+      apply_to: ["training"]
+      # Adversarial sampling keeps the first three samples as a non-iid
+      # quadrant prefix and replaces the fourth with a sample that shares
+      # no attribute values with those first three samples. This is intended
+      # for analogic/mixer training that predicts only the fourth element;
+      # transformer all-case prediction requires additional objective work.
+      sampling_mode: adversarial
+      deterministic: False
+    attributes: &ATT
+      - name: shape
+        out_dim: 3
+        var: 1
+      - name: size
+        out_dim: 3
+        var: 0.2
+      - name: material
+        out_dim: 2
+        var: 1
+      - name: color
+        out_dim: 8
+        var: 1
+  testing:
+    dataset: ${data.training.dataset}
+    path: ${data.training.path}
+    targets: ${data.training.targets}
+    split_attributes: ${data.training.split_attributes}
+    split: ${data.training.split}
+    split_difficulty: ${data.training.split_difficulty}
+    train: False
+    shuffle: False
+    batch_size: 2048
+    downsample: 0
+    num_workers: 1
+    attributes: *ATT
+
+training:
+  n_epoch: 250
+
+model:
+  preprocessing:
+    - arch: augmentator
+      train:
+        - name: resize
+          size: 128
+          antialias: True
+      test:
+        - name: resize
+          size: 128
+          antialias: True
+
+  feature_extraction:
+    in_channels: 3

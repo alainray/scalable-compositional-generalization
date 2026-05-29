@@ -160,6 +160,7 @@ class NonIIDWrapper(Dataset):
         allowed_attributes: Optional[Sequence[str]] = None,
         shared_other_attributes: bool = True,
         fully_iid: bool = False,
+        sampling_mode: Optional[str] = None,
         deterministic: bool = False,
         precompute_deterministic: bool = False,
         max_deterministic_candidates: int = 1_024,
@@ -168,7 +169,8 @@ class NonIIDWrapper(Dataset):
         self.max_resample_attempts = max_resample_attempts
         self.rng = np.random.default_rng(seed)
         self.shared_other_attributes = shared_other_attributes
-        self.fully_iid = fully_iid
+        self.sampling_mode = self._resolve_sampling_mode(sampling_mode, fully_iid)
+        self.fully_iid = self.sampling_mode == "iid"
         self.deterministic = deterministic
         self.precompute_deterministic = precompute_deterministic
         self.max_deterministic_candidates = max_deterministic_candidates
@@ -183,6 +185,27 @@ class NonIIDWrapper(Dataset):
             )
         if self.deterministic and self.precompute_deterministic:
             self._deterministic_candidates = self._build_deterministic_candidates()
+
+    @staticmethod
+    def _resolve_sampling_mode(
+        sampling_mode: Optional[str], fully_iid: bool
+    ) -> str:
+        """Normalize sampling mode while preserving the legacy fully_iid flag."""
+        if sampling_mode is None:
+            return "iid" if fully_iid else "non_iid"
+        valid_modes = {"non_iid", "iid", "adversarial"}
+        if sampling_mode not in valid_modes:
+            raise ValueError(
+                "NonIIDWrapper sampling_mode must be one of "
+                f"{sorted(valid_modes)}, got {sampling_mode!r}."
+            )
+        if fully_iid and sampling_mode != "iid":
+            raise ValueError(
+                "NonIIDWrapper received fully_iid=True with "
+                f"sampling_mode={sampling_mode!r}. Use sampling_mode='iid' or "
+                "remove fully_iid."
+            )
+        return sampling_mode
 
     @staticmethod
     def _unwrap_subset(dataset: Dataset) -> Tuple[Dataset, Optional[np.ndarray]]:
@@ -232,6 +255,10 @@ class NonIIDWrapper(Dataset):
                 value_d,
                 other_values,
             )
+            if self.sampling_mode == "adversarial":
+                desired_targets = self._build_adversarial_targets(desired_targets)
+                if desired_targets is None:
+                    continue
             indices = self._select_indices(desired_targets)
             if indices is None:
                 continue
@@ -245,6 +272,13 @@ class NonIIDWrapper(Dataset):
             images = self._stack_images(images)
             targets = torch.as_tensor(np.stack(targets))
             return images, targets
+        if self.sampling_mode == "adversarial":
+            raise RuntimeError(
+                "Failed to sample a valid adversarial non-iid batch within the "
+                "resample limit. The fourth sample must have no attribute values "
+                "in common with the first three samples; try a training split with "
+                "more available values per attribute or disable adversarial sampling."
+            )
         raise RuntimeError(
             "Failed to sample a valid non-iid batch within the resample limit."
         )
@@ -257,6 +291,12 @@ class NonIIDWrapper(Dataset):
                 raise RuntimeError("Deterministic non-iid sampling is disabled.")
             self._deterministic_candidates = self._build_deterministic_candidates()
         if not self._deterministic_candidates:
+            if self.sampling_mode == "adversarial":
+                raise RuntimeError(
+                    "Failed to sample a valid adversarial non-iid batch: no "
+                    "deterministic candidates were found with a fourth sample "
+                    "that is feature-disjoint from the first three samples."
+                )
             raise RuntimeError(
                 "Failed to sample a valid non-iid batch: no deterministic "
                 "candidate quadrants were found."
@@ -279,6 +319,12 @@ class NonIIDWrapper(Dataset):
                         attr_a, attr_b, collect_all=True
                     )
                 for candidate in pair_candidates:
+                    if self.sampling_mode == "adversarial":
+                        candidate = self._make_deterministic_adversarial_candidate(
+                            candidate
+                        )
+                        if candidate is None:
+                            continue
                     key = tuple(candidate)
                     if key in seen:
                         continue
@@ -474,6 +520,61 @@ class NonIIDWrapper(Dataset):
             build_target(value_b, value_c, other_values_list[2]),
             build_target(value_b, value_d, other_values_list[3]),
         ]
+
+    def _build_adversarial_targets(
+        self, quadrant_targets: Sequence[Tuple[int, ...]]
+    ) -> Optional[List[Tuple[int, ...]]]:
+        """Return three non-iid corners plus a feature-disjoint fourth target.
+
+        The adversarial mode is intentionally defined only at the data sampling
+        level for analogic/mixer experiments that predict the fourth element
+        from the first three. Transformer-style all-case prediction requires a
+        separate objective/design because the fourth sample is no longer a true
+        quadrant corner for the other three prediction cases.
+        """
+        first_three = list(quadrant_targets[:3])
+        adversarial_target = self._sample_adversarial_target(first_three)
+        if adversarial_target is None:
+            return None
+        return first_three + [adversarial_target]
+
+    def _sample_adversarial_target(
+        self, reference_targets: Sequence[Tuple[int, ...]]
+    ) -> Optional[Tuple[int, ...]]:
+        candidate_targets = self._adversarial_candidate_targets(reference_targets)
+        if not candidate_targets:
+            return None
+        return candidate_targets[int(self.rng.integers(len(candidate_targets)))]
+
+    def _make_deterministic_adversarial_candidate(
+        self, quadrant_indices: Sequence[int]
+    ) -> Optional[List[int]]:
+        first_three_indices = list(quadrant_indices[:3])
+        first_three_targets = [
+            tuple(self._targets[idx].tolist()) for idx in first_three_indices
+        ]
+        candidate_targets = self._adversarial_candidate_targets(first_three_targets)
+        if not candidate_targets:
+            return None
+        adversarial_target = sorted(candidate_targets)[0]
+        adversarial_index = int(self._index_by_target[adversarial_target][0])
+        return first_three_indices + [adversarial_index]
+
+    def _adversarial_candidate_targets(
+        self, reference_targets: Sequence[Tuple[int, ...]]
+    ) -> List[Tuple[int, ...]]:
+        if not reference_targets:
+            return []
+        refs = np.asarray(reference_targets)
+        candidate_mask = np.ones(len(self._targets), dtype=bool)
+        for attr_idx in range(self._targets.shape[1]):
+            forbidden_values = np.unique(refs[:, attr_idx])
+            candidate_mask &= ~np.isin(self._targets[:, attr_idx], forbidden_values)
+        candidate_rows = np.flatnonzero(candidate_mask)
+        candidates = {
+            tuple(self._targets[row_idx].tolist()) for row_idx in candidate_rows
+        }
+        return sorted(candidates)
 
     def _select_indices(self, targets: Sequence[Tuple[int, ...]]) -> Optional[List]:
         indices = []
