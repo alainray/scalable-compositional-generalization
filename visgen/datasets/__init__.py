@@ -123,6 +123,7 @@ def _wrap_non_iid(dataset, cfg, split_name=None, fallback_seed=None):
 		allowed_attributes=allowed_attributes,
 		shared_other_attributes=non_iid_cfg.get("shared_other_attributes", True),
 		fully_iid=non_iid_cfg.get("fully_iid", False),
+		sampling_mode=non_iid_cfg.get("sampling_mode", None),
 		deterministic=non_iid_cfg.get("deterministic", False),
 		precompute_deterministic=non_iid_cfg.get("precompute_deterministic", False),
 		max_deterministic_candidates=non_iid_cfg.get("max_deterministic_candidates", 1_024),
