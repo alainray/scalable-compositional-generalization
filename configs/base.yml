@@ -2,6 +2,7 @@ seed: 0
 path:
   base: out/
   full: ''
+  model_dir_suffix: ''
 logger:
   name: wandb
   project: visgen
