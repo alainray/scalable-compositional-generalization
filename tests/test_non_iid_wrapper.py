@@ -182,3 +182,110 @@ def test_unpredictable_target_rejects_invalid_level():
             sampling_mode="unpredictable_target",
             num_unpredictable_attributes=3,
         )
+
+
+def test_random_deterministic_sampling_has_base_and_attribute_pair_diversity():
+    dataset = ToyDataset(attribute_cardinalities=(6, 6, 6))
+    wrapper = NonIIDWrapper(
+        dataset,
+        sampling_mode="unpredictable_target",
+        num_unpredictable_attributes=1,
+        deterministic=True,
+        precompute_deterministic=True,
+        max_deterministic_candidates=64,
+        seed=123,
+    )
+
+    targets = [wrapper[idx][1] for idx in range(len(wrapper))]
+    base_targets = {tuple(_target_rows(target)[0]) for target in targets}
+    assert len(base_targets) > 1
+
+    changed_attr_pairs = set()
+    for target in targets:
+        rows = _target_rows(target)
+        first_three = rows[:3]
+        attr_a = tuple(
+            idx
+            for idx in range(rows.shape[1])
+            if first_three[0, idx] != first_three[2, idx]
+        )
+        attr_b = tuple(
+            idx
+            for idx in range(rows.shape[1])
+            if first_three[0, idx] != first_three[1, idx]
+        )
+        changed_attr_pairs.add((attr_a, attr_b))
+
+    assert len(changed_attr_pairs) > 1
+
+
+def test_random_deterministic_sampling_is_reproducible_with_same_seed():
+    dataset = ToyDataset(attribute_cardinalities=(6, 6, 6))
+    w1 = NonIIDWrapper(
+        dataset,
+        sampling_mode="unpredictable_target",
+        num_unpredictable_attributes=2,
+        deterministic=True,
+        precompute_deterministic=True,
+        max_deterministic_candidates=32,
+        seed=123,
+    )
+    w2 = NonIIDWrapper(
+        dataset,
+        sampling_mode="unpredictable_target",
+        num_unpredictable_attributes=2,
+        deterministic=True,
+        precompute_deterministic=True,
+        max_deterministic_candidates=32,
+        seed=123,
+    )
+
+    assert len(w1) == len(w2)
+    for idx in range(len(w1)):
+        assert torch.equal(w1[idx][1], w2[idx][1])
+
+
+def test_random_deterministic_sampling_differs_with_different_seed():
+    dataset = ToyDataset(attribute_cardinalities=(6, 6, 6))
+    w1 = NonIIDWrapper(
+        dataset,
+        sampling_mode="unpredictable_target",
+        num_unpredictable_attributes=2,
+        deterministic=True,
+        precompute_deterministic=True,
+        max_deterministic_candidates=32,
+        seed=123,
+    )
+    w2 = NonIIDWrapper(
+        dataset,
+        sampling_mode="unpredictable_target",
+        num_unpredictable_attributes=2,
+        deterministic=True,
+        precompute_deterministic=True,
+        max_deterministic_candidates=32,
+        seed=124,
+    )
+
+    assert any(
+        not torch.equal(w1[idx][1], w2[idx][1])
+        for idx in range(min(len(w1), len(w2)))
+    )
+
+
+def test_deterministic_sampling_enumerate_strategy_remains_available():
+    dataset = ToyDataset()
+    wrapper = NonIIDWrapper(
+        dataset,
+        deterministic=True,
+        precompute_deterministic=True,
+        deterministic_sampling_strategy="enumerate",
+    )
+
+    assert len(wrapper) > 0
+
+
+def test_deterministic_sampling_rejects_invalid_strategy():
+    dataset = ToyDataset()
+
+    with pytest.raises(ValueError, match="deterministic_sampling_strategy"):
+        NonIIDWrapper(dataset, deterministic_sampling_strategy="bad_strategy")

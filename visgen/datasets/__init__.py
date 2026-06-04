@@ -134,6 +134,14 @@ def _wrap_non_iid(dataset, cfg, split_name=None, fallback_seed=None):
 		precompute_deterministic=non_iid_cfg.get("precompute_deterministic", False),
 		max_deterministic_candidates=_non_iid_max_deterministic_candidates(non_iid_cfg),
 		num_unpredictable_attributes=non_iid_cfg.get("num_unpredictable_attributes", 1),
+		deterministic_sampling_strategy=non_iid_cfg.get(
+			"deterministic_sampling_strategy",
+			"random",
+		),
+		max_deterministic_resample_attempts=non_iid_cfg.get(
+			"max_deterministic_resample_attempts",
+			None,
+		),
 	)
 
 
