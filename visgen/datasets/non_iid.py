@@ -165,6 +165,8 @@ class NonIIDWrapper(Dataset):
         precompute_deterministic: bool = False,
         max_deterministic_candidates: int = 1_024,
         num_unpredictable_attributes: int = 1,
+        deterministic_sampling_strategy: str = "random",
+        max_deterministic_resample_attempts: Optional[int] = None,
     ) -> None:
         self.dataset = dataset
         self.max_resample_attempts = max_resample_attempts
@@ -177,6 +179,14 @@ class NonIIDWrapper(Dataset):
         self.max_deterministic_candidates = max_deterministic_candidates
         self.num_unpredictable_attributes = self._resolve_num_unpredictable_attributes(
             num_unpredictable_attributes
+        )
+        self.deterministic_sampling_strategy = (
+            self._resolve_deterministic_sampling_strategy(
+                deterministic_sampling_strategy
+            )
+        )
+        self.max_deterministic_resample_attempts = (
+            max_deterministic_resample_attempts
         )
         self._targets, self._attribute_values = self._prepare_targets(dataset)
         self._index_by_target = self._build_index(self._targets)
@@ -210,6 +220,16 @@ class NonIIDWrapper(Dataset):
                 "remove fully_iid."
             )
         return sampling_mode
+
+    @staticmethod
+    def _resolve_deterministic_sampling_strategy(strategy: str) -> str:
+        valid = {"random", "enumerate"}
+        if strategy not in valid:
+            raise ValueError(
+                "NonIIDWrapper deterministic_sampling_strategy must be one of "
+                f"{sorted(valid)}, got {strategy!r}."
+            )
+        return strategy
 
     def _resolve_num_unpredictable_attributes(
         self, num_unpredictable_attributes: int
@@ -352,6 +372,11 @@ class NonIIDWrapper(Dataset):
     def _build_deterministic_candidates(self) -> List[List[int]]:
         if self.fully_iid:
             return []
+        if self.deterministic_sampling_strategy == "enumerate":
+            return self._build_deterministic_candidates_enumerated()
+        return self._build_deterministic_candidates_random()
+
+    def _build_deterministic_candidates_enumerated(self) -> List[List[int]]:
         candidates: List[List[int]] = []
         seen = set()
         for i, attr_a in enumerate(self._attribute_indices):
@@ -385,6 +410,82 @@ class NonIIDWrapper(Dataset):
                     if len(candidates) >= self.max_deterministic_candidates:
                         return candidates
         return candidates
+
+    def _build_deterministic_candidates_random(self) -> List[List[int]]:
+        if not self.shared_other_attributes:
+            return self._build_deterministic_candidates_enumerated()
+
+        candidates: List[List[int]] = []
+        seen = set()
+        max_attempts = self.max_deterministic_resample_attempts
+        if max_attempts is None:
+            max_attempts = max(10_000, self.max_deterministic_candidates * 100)
+
+        for _ in range(max_attempts):
+            candidate = self._sample_deterministic_candidate_from_base()
+            if candidate is None:
+                continue
+            key = tuple(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+            if len(candidates) >= self.max_deterministic_candidates:
+                break
+        return candidates
+
+    def _sample_deterministic_candidate_from_base(self) -> Optional[List[int]]:
+        base_idx = int(self.rng.integers(len(self._targets)))
+        base_target = tuple(self._targets[base_idx].tolist())
+        attr_a, attr_b = self.rng.choice(
+            self._attribute_indices, size=2, replace=False
+        )
+        attr_a = int(attr_a)
+        attr_b = int(attr_b)
+
+        alt_a_values = [
+            value
+            for value in self._attribute_values[attr_a]
+            if value != base_target[attr_a]
+        ]
+        alt_b_values = [
+            value
+            for value in self._attribute_values[attr_b]
+            if value != base_target[attr_b]
+        ]
+        if not alt_a_values or not alt_b_values:
+            return None
+
+        alt_a = self.rng.choice(alt_a_values)
+        alt_b = self.rng.choice(alt_b_values)
+
+        target_00 = list(base_target)
+        target_01 = list(base_target)
+        target_01[attr_b] = alt_b
+        target_10 = list(base_target)
+        target_10[attr_a] = alt_a
+        target_11 = list(base_target)
+        target_11[attr_a] = alt_a
+        target_11[attr_b] = alt_b
+
+        quadrant_targets = [
+            tuple(target_00),
+            tuple(target_01),
+            tuple(target_10),
+            tuple(target_11),
+        ]
+
+        if self.sampling_mode == "adversarial":
+            sampled_targets = self._build_adversarial_targets(quadrant_targets)
+        elif self.sampling_mode == "unpredictable_target":
+            sampled_targets = self._build_unpredictable_targets(
+                quadrant_targets, attr_a, attr_b
+            )
+        else:
+            sampled_targets = quadrant_targets
+        if sampled_targets is None:
+            return None
+        return self._select_deterministic_indices(sampled_targets)
 
     def _find_valid_indices_deterministic(self) -> Optional[List[int]]:
         candidates = self._build_deterministic_candidates()
@@ -730,6 +831,17 @@ class NonIIDWrapper(Dataset):
             tuple(self._targets[row_idx].tolist()) for row_idx in candidate_rows
         }
         return sorted(candidates)
+
+    def _select_deterministic_indices(
+        self, targets: Sequence[Tuple[int, ...]]
+    ) -> Optional[List[int]]:
+        indices = []
+        for target in targets:
+            options = self._index_by_target.get(target)
+            if not options:
+                return None
+            indices.append(int(options[0]))
+        return indices
 
     def _select_indices(self, targets: Sequence[Tuple[int, ...]]) -> Optional[List]:
         indices = []
