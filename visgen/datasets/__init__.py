@@ -101,6 +101,12 @@ def _filter_allowed_attributes(dataset, allowed_attributes):
 	return eligible
 
 
+def _non_iid_max_deterministic_candidates(non_iid_cfg):
+	if "max_deterministic_candidates" in non_iid_cfg:
+		return non_iid_cfg["max_deterministic_candidates"]
+	return non_iid_cfg.get("num_quadrilaterals", 1_024)
+
+
 def _wrap_non_iid(dataset, cfg, split_name=None, fallback_seed=None):
 	non_iid_cfg = _non_iid_cfg_for_split(cfg, split_name)
 	if not non_iid_cfg:
@@ -126,10 +132,35 @@ def _wrap_non_iid(dataset, cfg, split_name=None, fallback_seed=None):
 		sampling_mode=non_iid_cfg.get("sampling_mode", None),
 		deterministic=non_iid_cfg.get("deterministic", False),
 		precompute_deterministic=non_iid_cfg.get("precompute_deterministic", False),
-		max_deterministic_candidates=non_iid_cfg.get("max_deterministic_candidates", 1_024),
+		max_deterministic_candidates=_non_iid_max_deterministic_candidates(non_iid_cfg),
+		num_unpredictable_attributes=non_iid_cfg.get("num_unpredictable_attributes", 1),
 	)
 
 
+
+
+def _extra_eval_splits(cfg):
+	extra_splits = getattr(cfg, "eval_splits", None)
+	if not extra_splits:
+		return []
+	if hasattr(extra_splits, "items"):
+		items = extra_splits.items()
+	else:
+		items = []
+		for split_cfg in extra_splits:
+			name = split_cfg.get("name")
+			if name is None:
+				raise ValueError("Each eval_splits entry must define a name.")
+			items.append((name, split_cfg))
+	resolved = []
+	for name, split_cfg in items:
+		if isinstance(split_cfg, bool):
+			enabled = split_cfg
+		else:
+			enabled = split_cfg.get("enabled", True)
+		if enabled:
+			resolved.append(name)
+	return resolved
 
 
 def _val_4cases_cfg(cfg):
@@ -234,6 +265,9 @@ def get_dataloaders(data_cfg, writer=None, seed=None):
 				(key, train_data),
 				("validation", val_data),
 			]
+			datasets += [
+				(extra_split, train_data) for extra_split in _extra_eval_splits(cfg)
+			]
 			if v4_cfg["enabled"]:
 				allowed_attributes = v4_cfg["allowed_attributes"]
 				if not allowed_attributes:
@@ -262,6 +296,9 @@ def get_dataloaders(data_cfg, writer=None, seed=None):
 			]
 		else:
 			datasets = [(key, data)]
+			datasets += [
+				(extra_split, data) for extra_split in _extra_eval_splits(cfg)
+			]
 		non_iid_cfg = _resolve_non_iid_cfg(cfg)
 		apply_to = None
 		if non_iid_cfg and not isinstance(non_iid_cfg, str):
