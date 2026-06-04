@@ -3,6 +3,7 @@
 # get command line args
 dataset=$1
 experiment=$2
+sampling=$3 # adversarial/unpredictable_target_1/unpredictable_target_2
 model="split_resnet_algebraic_non_iid"
 
 if [ -z "$dataset" ] || [ -z "$experiment" ]; then
@@ -11,7 +12,7 @@ if [ -z "$dataset" ] || [ -z "$experiment" ]; then
 fi
 
 # set number of experiment repetitions
-SEEDS=(4 5)
+SEEDS=(1 2 3)
 
 # define dataset-specific split attributes
 if [ "$dataset" = "dsprites" ]; then
@@ -44,18 +45,19 @@ else
 fi
 
 split=general_composition
-data_cfg="configs/datasets/${dataset}_adversarial.yml"
+data_cfg="configs/datasets/${dataset}_${sampling}.yml"
 model_cfg="configs/models/${model}.yml"
 
 for c in "${C[@]}"; do
     for seed in "${SEEDS[@]}"; do
         difficulty=${D[0]}
         python main.py --experiment-cfg "configs/experiments/${experiment}.yml" \
-        --data-cfg "$data_cfg" --model-cfg "$model_cfg" \
+        --data-cfg "$data_cfg" --model-cfg "$model_cfg"  --model-dir-suffix "${sampling}" \
         data.training.targets=$split_attributes data.training.split_attributes=$split_attributes \
         data.training.split=$split data.testing.split=$split \
         data.training.c=$c data.testing.c=$c \
         data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty \
-        --seed=$seed data.training.num_workers=0 data.testing.num_workers=4 logger.name=wandb
+        --seed=$seed data.training.num_workers=0 data.testing.num_workers=4 logger.name=wandb \
+	
     done
 done
