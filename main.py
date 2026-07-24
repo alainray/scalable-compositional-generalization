@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--test", default=False, action="store_true")
     parser.add_argument("--sweep", default=False, action="store_true")
     parser.add_argument("--ed-superposition-init", type=str)
+    parser.add_argument("--model-dir-suffix", type=str, default=None)
     return parser.parse_known_args()
 
 
@@ -57,6 +58,22 @@ def custom_cfg_conflict_resolution(cfg, model_cfg, data_cfg, experiment_cfg, cfg
     if hasattr(model_cfg, "model") and hasattr(model_cfg.model, "preprocessing"):
         cfg.model.preprocessing = model_cfg.model.preprocessing
     return cfg
+
+
+def get_model_dir_name(model_cfg_path, suffix=None):
+    """Return the model results folder name, optionally appending a suffix."""
+    model_name = os.path.splitext(os.path.basename(model_cfg_path))[0]
+    if suffix is None:
+        return model_name
+
+    suffix = str(suffix).strip()
+    if suffix == "":
+        return model_name
+    if suffix in {".", ".."} or os.path.basename(suffix) != suffix:
+        raise ValueError(
+            "Model directory suffix must be a folder-name suffix, not a path"
+        )
+    return f"{model_name}_{suffix}"
 
 
 def log_info(cfg, debug=False):
@@ -94,6 +111,8 @@ if __name__ == "__main__":
 
     # merge order is important here, determines the hierarchy
     cfg = OmegaConf.merge(cfg_base, cfg_model, cfg_data, cfg_experiment, cfg_cli)
+    if args.model_dir_suffix is not None:
+        cfg.path.model_dir_suffix = args.model_dir_suffix
     # resolve conflicts in configs
     cfg = custom_cfg_conflict_resolution(
         cfg, cfg_model, cfg_data, cfg_experiment, cfg_cli
@@ -111,7 +130,7 @@ if __name__ == "__main__":
         run_name = "debug"
     else:
         run_name = os.path.basename(args.experiment_cfg).split(".")[0]
-    model_name = os.path.basename(args.model_cfg).split(".")[0]
+    model_name = get_model_dir_name(args.model_cfg, cfg.path.get("model_dir_suffix"))
 
     # if test only, set number of epochs to 0 and turn off wandb
     if args.test:

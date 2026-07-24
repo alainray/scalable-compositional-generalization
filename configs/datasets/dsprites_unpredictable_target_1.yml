@@ -1,0 +1,149 @@
+data:
+  training:
+    dataset: dsprites
+    path: data/dsprites/dsprites.npz
+    targets:
+    split_attributes:
+    split: composition
+    split_difficulty: 0.1
+    train: True
+    shuffle: True
+    batch_size: 1024
+    downsample: 0
+    val_fraction: 0.1
+    val_4cases:
+      enabled: True
+      replace_validation: False
+      export_split: True
+      # optional:
+      # shared_other_attributes: True
+      # allowed_attributes: ["shape", "scale"]
+    num_workers: 1
+    eval_splits:
+      ut1_train: True
+      ut2_train: True
+      adv_train: True
+    non_iid:
+      name: non_iid
+      seed: ${seed}
+      apply_to: ["training", "ut1_train", "ut2_train", "adv_train"]
+      # Unpredictable-target sampling keeps the first three samples as a
+      # non-iid quadrant prefix and replaces the fourth with a target where
+      # one or both quadrant attributes use values unseen in the prefix.
+      sampling_mode: unpredictable_target
+      num_unpredictable_attributes: 1
+      deterministic: False
+      split_overrides:
+        ut1_train:
+          sampling_mode: unpredictable_target
+          num_unpredictable_attributes: 1
+          deterministic: True
+          precompute_deterministic: True
+          deterministic_sampling_strategy: random
+          num_quadrilaterals: 512
+          max_deterministic_resample_attempts: 50000
+          seed: 123
+        ut2_train:
+          sampling_mode: unpredictable_target
+          num_unpredictable_attributes: 2
+          deterministic: True
+          precompute_deterministic: True
+          deterministic_sampling_strategy: random
+          num_quadrilaterals: 512
+          max_deterministic_resample_attempts: 50000
+          seed: 124
+        adv_train:
+          sampling_mode: adversarial
+          deterministic: True
+          precompute_deterministic: True
+          deterministic_sampling_strategy: random
+          num_quadrilaterals: 512
+          max_deterministic_resample_attempts: 50000
+          seed: 125
+    attributes: &ATT
+      - name: shape
+        out_dim: 3
+        var: 1.0
+      - name: scale
+        out_dim: 6
+        var: 0.2
+      - name: orientation
+        out_dim: 40
+        var: 0.2
+      - name: x-position
+        out_dim: 32
+        var: 0.2
+      - name: y-position
+        out_dim: 32
+        var: 0.2
+  testing:
+    dataset: ${data.training.dataset}
+    path: ${data.training.path}
+    targets: ${data.training.targets}
+    split_attributes: ${data.training.split_attributes}
+    split: ${data.training.split}
+    split_difficulty: ${data.training.split_difficulty}
+    train: False
+    shuffle: False
+    batch_size: 2048
+    downsample: 0
+    num_workers: 1
+    eval_splits:
+      ut1_test: True
+      ut2_test: True
+      adv_test: True
+    non_iid:
+      name: non_iid
+      seed: ${seed}
+      apply_to: ["ut1_test", "ut2_test", "adv_test"]
+      deterministic: False
+      split_overrides:
+        ut1_test:
+          sampling_mode: unpredictable_target
+          num_unpredictable_attributes: 1
+          deterministic: True
+          precompute_deterministic: True
+          deterministic_sampling_strategy: random
+          num_quadrilaterals: 512
+          max_deterministic_resample_attempts: 50000
+          seed: 223
+        ut2_test:
+          sampling_mode: unpredictable_target
+          num_unpredictable_attributes: 2
+          deterministic: True
+          precompute_deterministic: True
+          deterministic_sampling_strategy: random
+          num_quadrilaterals: 512
+          max_deterministic_resample_attempts: 50000
+          seed: 224
+        adv_test:
+          sampling_mode: adversarial
+          deterministic: True
+          precompute_deterministic: True
+          deterministic_sampling_strategy: random
+          num_quadrilaterals: 512
+          max_deterministic_resample_attempts: 50000
+          seed: 225
+    attributes: *ATT
+
+model:
+
+  preprocessing:
+    - arch: augmentator
+      train:
+        - name: resize
+          size: 64
+          antialias: True
+        - name: gauss_blur
+          kernel_size: [23, 23]
+          sigma: [0.1, 0.3]
+      test:
+        - name: resize
+          size: 64
+          antialias: True
+        - name: gauss_blur
+          kernel_size: [23, 23]
+          sigma: [0.1, 0.3]
+
+  feature_extraction:
+    in_channels: 1

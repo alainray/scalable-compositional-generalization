@@ -71,7 +71,7 @@ To reproduce the training of the models, use the provided runner scripts:
 - `experiment`: Name of the experiment configuration file (omit `.yml` extension).
 - `model`: Name of the model configuration (see `configs/models` for options, also omit `.yml`).
 
-Training outputs will be saved in the `out/` directory and can be post-processed with:
+Training outputs will be saved in the `out/` directory. By default, the model-level results folder uses the model configuration name; append a custom suffix with `--model-dir-suffix <suffix>` or `path.model_dir_suffix=<suffix>` to save under `<model_config>_<suffix>`. Outputs can be post-processed with:
 ```bash
 python out/parse_out.py
 ```

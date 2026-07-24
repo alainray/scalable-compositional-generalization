@@ -1,11 +1,11 @@
 from glob import glob
-from setuptools import setup
+from setuptools import find_packages, setup
 
 setup(
     name="visgen",
     version="0.0",
     description="Visual Generalization study.",
-    packages=["visgen"],
+    packages=find_packages(include=["visgen", "visgen.*"]),
     data_files=[("configs", glob("configs/*.json"))],
-    python_required=">=3.9",
+    python_requires=">=3.9",
 )
