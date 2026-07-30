@@ -1,3 +1,4 @@
+from .crm import CRMTrainer
 from .trainer import BaseTrainer  # , BiLevelTrainer, MultiStepTrainer
 
 
@@ -6,6 +7,8 @@ def get_trainer(cfg):
     device = cfg["device"]
     if trainer_type == "base":
         trainer = BaseTrainer(cfg["training"], device=device)
+    elif trainer_type == "crm":
+        trainer = CRMTrainer(cfg["training"], device=device)
     # elif trainer_type == "multistep":
     #     trainer = MultiStepTrainer(cfg["training"], device=device)
     # elif trainer_type == "bilevel":

@@ -1,10 +1,10 @@
 import numpy as np,torch.nn as nn
 from.funct import get_activation
 class FC_vec(nn.Module):
-	def __init__(self,in_dim=2,out_dim=1,l_hidden=None,activation=None,out_activation=None,**kwargs):
+	def __init__(self,in_dim=2,out_dim=1,l_hidden=None,activation=None,out_activation=None,bias=True,**kwargs):
 		super(FC_vec,self).__init__();self.in_dim=in_dim;self.out_dim=out_dim;l_neurons=l_hidden+[out_dim];activation=activation+[out_activation];l_layer=[];prev_dim=in_dim
 		for[n_hidden,act]in zip(l_neurons,activation):
-			l_layer.append(nn.Linear(prev_dim,n_hidden));act_fn=get_activation(act)
+			l_layer.append(nn.Linear(prev_dim,n_hidden,bias=bias));act_fn=get_activation(act)
 			if act_fn is not None:l_layer.append(act_fn)
 			prev_dim=n_hidden
 		self.net=nn.Sequential(*l_layer)

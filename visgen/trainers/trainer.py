@@ -26,6 +26,23 @@ class BaseTrainer:
         self.cfg = cfg
         self.device = device
 
+    # -- extension hooks (no-ops here; see visgen/trainers/crm.py) ---------
+
+    def build_model(self, model, d_dataloaders, writer=None):
+        """Last chance to replace/wrap the model before the optimizer is built."""
+        return model
+
+    def build_optimizer(self, model):
+        return get_optimizer(self.cfg["optimizer"], model.parameters())
+
+    def on_epoch_end(self, model, d_dataloaders, i_epoch, logams):
+        """Extra values to log for this epoch."""
+        return {}
+
+    def finalize(self, model, d_dataloaders, savepath, best_ams, prefix=""):
+        """Extra values to record in results.json after the training loop."""
+        return {}
+
     def train(self, model, d_dataloaders, savepath, writer=None, prefix=""):
 
         # create experiment folder
@@ -84,8 +101,12 @@ class BaseTrainer:
             test_metric, best_test_metric = None, None
         best_ams = {}
 
+        # allow a subclass to wrap the model (must happen before the optimizer
+        # is built, so that any parameters it adds are actually optimized)
+        model = self.build_model(model, d_dataloaders, writer=writer)
+
         # init optimizer
-        optimizer = get_optimizer(self.cfg["optimizer"], model.parameters())
+        optimizer = self.build_optimizer(model)
 
         # init varia
         metrics = model.get_logged_metrics()
@@ -230,6 +251,7 @@ class BaseTrainer:
                     if rep_metrics is not None:
                         for key, value in rep_metrics.items():
                             logams[f"{prefix}{rep_metrics_split}_{key}"] = value
+            logams |= self.on_epoch_end(model, d_dataloaders, i_epoch, logams)
             plot_train = None
             plot_test = None
 
@@ -289,6 +311,12 @@ class BaseTrainer:
                 + f"\n   best model: {best_model}"
             )
         # END TRAINING LOOP
+
+        final = self.finalize(model, d_dataloaders, savepath, best_ams, prefix=prefix)
+        if final:
+            best_ams |= final
+            if writer is not None:
+                writer.write(final)
 
         # save metrics summary
         save_json(os.path.join(savepath, "results.json"), best_ams)

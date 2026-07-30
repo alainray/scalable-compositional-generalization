@@ -1,0 +1,40 @@
+training:
+  trainer: crm
+  fp-16: True
+  n_epoch: 50
+  verbose: True
+  checkpointing: True
+  log_steps: 5
+  optimizer:
+    name: adamw
+  objective: classification
+  loss:
+    name: cross_entropy
+  metrics:
+    - name: multi_accuracy
+  if_exists: retrain
+  # `wio_acc` uses the baseline (per-attribute argmax) rule; the CRM decision
+  # rule is reported alongside as val_crm_acc / test_crm_acc, and the final
+  # post-hoc numbers land in results.json as final_*_crm_acc.
+  selection_metric: wio_acc
+  representation_metrics:
+    enabled: False
+  crm:
+    # shrinkage for the per-group bias table. With one sample per group
+    # (cars3d) B_hat is a very high-variance estimate.
+    b_weight_decay: 1.0e-4
+    # groups scored at test time. `full_product` = no oracle knowledge of the
+    # test support; `train_support` would only score seen combinations.
+    eval_group_set: full_product
+    test_prior: uniform          # uniform | empirical
+    group_chunk: 65536
+    # step 2 is O(N_train * G_eval); running it every epoch is prohibitive on
+    # the large datasets, so by default it runs once at the end on the selected
+    # checkpoint. Set >0 to also refresh it during training (subsampled).
+    extrapolate_every_n_epochs: 0
+    extrapolate_num_samples: 20000
+    final_extrapolate_num_samples: null   # null = full training set
+    report_baseline_metrics: True
+    # scoring the full group set costs more than the backbone on mpi3d, so the
+    # CRM metrics are only computed on the eval splits by default
+    crm_metrics_on_train: False

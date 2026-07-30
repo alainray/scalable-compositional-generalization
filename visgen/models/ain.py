@@ -10,6 +10,8 @@ class SplitResNet18(ResNet):
         self,
         split_layers=1,
         exit_reg=10,
+        use_task_classifiers=False,
+        head_bias=True,
         **kwargs,
     ):
         super().__init__(
@@ -85,6 +87,21 @@ class SplitResNet18(ResNet):
         self.exit_head = nn.Linear(self.exit_head_in_channels, sum(self.attribute_sizes))
         self.exit_avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
+        # By default this model reads logits straight off the 512-d branch
+        # features (see forward), which requires sum(attribute_sizes) <= 512 and
+        # gives no real readout. `use_task_classifiers` adds one proper linear
+        # head per attribute instead -- required by CRM, which needs clean
+        # per-attribute energies (and no bias, so that the per-group table
+        # B_hat stays identifiable).
+        self.use_task_classifiers = use_task_classifiers
+        if use_task_classifiers:
+            self.task_classifiers = nn.ModuleList(
+                [
+                    nn.Linear(self.out_dim, attr_size, bias=head_bias)
+                    for attr_size in self.attribute_sizes
+                ]
+            )
+
         shared_blocks = []
         for i in range(self.split_layers, 4):
             if i == 0:
@@ -144,7 +161,7 @@ class SplitResNet18(ResNet):
 
     def forward(self, x, mode='test'):
         x_split, _, h = self._encode_split(x)
-        
+
         # early exit embeddings
         h = self.exit_avgpool(h)
         h = torch.flatten(h, 1)
@@ -157,7 +174,10 @@ class SplitResNet18(ResNet):
             logits_x, logits_h = [], []
             j = 0
             for i, n in enumerate(self.attribute_sizes):
-                logits_xi = x_split[i][:, j : j + n] 
+                if self.use_task_classifiers:
+                    logits_xi = self.task_classifiers[i](x_split[i])
+                else:
+                    logits_xi = x_split[i][:, j : j + n]
                 logits_hi = h_split[i][:, j : j + n]
                 logits_x.append(logits_xi)
                 logits_h.append(logits_hi)
@@ -223,9 +243,10 @@ class SplitResNet18Mixer(SplitResNet18):
         use_all_mixer_cases=False,
         mixer_mode="transformer",
         algebraic_use_all_terms=True,
+        head_bias=True,
         **kwargs,
     ):
-        super().__init__(**kwargs)
+        super().__init__(head_bias=head_bias, **kwargs)
         rep_dim = self.out_dim * len(self.attribute_sizes)
         num_pieces = len(self.attribute_sizes)
         if mixer_rep_piece_dim is not None:
@@ -240,7 +261,10 @@ class SplitResNet18Mixer(SplitResNet18):
             mixer_piece_dim = self.out_dim
         mixer_dim = mixer_piece_dim * num_pieces
         self.task_classifiers = nn.ModuleList(
-            [nn.Linear(self.out_dim, attr_size) for attr_size in self.attribute_sizes]
+            [
+                nn.Linear(self.out_dim, attr_size, bias=head_bias)
+                for attr_size in self.attribute_sizes
+            ]
         )
         if mixer_piece_dim == self.out_dim:
             self.mixer_piece_projections = nn.ModuleList(

@@ -83,6 +83,36 @@ For instance, to replicate the ResNet18 orthotopic results on the I-RAVEN datase
 
 ---
 
+## 🧩 Compositional Risk Minimization (CRM)
+
+CRM ([Ahuja et al., 2024](https://arxiv.org/abs/2410.06303)) is available as a
+*trainer*, so it can be layered on top of any architecture in `configs/models`:
+
+```bash
+./crm_runner.sh <dataset> crm [crm_resnet18|crm_split_resnet|crm_split_resnet_mixer]
+```
+
+Instead of one independent softmax per attribute, CRM trains a single softmax
+over the **observed group set** (the attribute combinations present in training)
+plus a learnable scalar per group `B_hat(z)`. After training, a closed-form pass
+over the training data yields the extrapolated bias `B_star(z) = log Z(z)` for
+*every* group, including unseen combinations, which replaces `B_hat` at
+inference. The implementation lives in `visgen/models/crm.py` and
+`visgen/trainers/crm.py`; everything over the group axis is chunked, so mpi3d
+(518,400 groups) peaks at ~1.2 GiB of GPU memory.
+
+Reported metrics: `crm_acc` (joint argmax with `B_star`), `crm_naive_acc` (the
+paper's ablation control, using `B_hat`) and `baseline_acc` (the usual
+per-attribute argmax). The post-hoc numbers are written to `results.json` under
+`final_*`, together with the effective sample size of the `B_star` estimator
+(`crm/b_star_ess_*`) — the key diagnostic when the group count is large.
+
+> ⚠️ CRM assumes no **novel attribute values** at test time, only novel
+> *combinations*. The orthotopic split with `c=0` removes whole attribute values
+> from training, which is outside that assumption; use `c >= 1`.
+
+---
+
 ## 📊 Reproducing Results
 The `results/` directory contains data extracted from training runs and code (via Jupyter notebook) to replicate the key figures and tables from the paper.
 
