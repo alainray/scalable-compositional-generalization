@@ -3,9 +3,9 @@
 #SBATCH --output=exp_logs/%x_%j.out
 #SBATCH --error=exp_logs/%x_%j.err
 #SBATCH --time=1-00:00:00
-#SBATCH --account=araymond
-#SBATCH --partition=ialab
-#SBATCH --nodelist=llaima
+#SBATCH --account=forgetting_pixels_learnin_vidt5
+#SBATCH --partition=debug
+#SBATCH --nodelist=peteroa
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
