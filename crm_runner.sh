@@ -1,6 +1,11 @@
 #!/bin/bash
 
 # Compositional Risk Minimization (CRM) over the orthotopic splits.
+# Mirrors compositional_orth.sh so CRM runs are directly comparable to the
+# baselines; the only differences are the model list and that the trainer is
+# forced to `crm` (a config with `trainer: base` would silently run the plain
+# trainer with no group head, no B_hat and no post-hoc step).
+#
 # Usage: ./crm_runner.sh <dataset> [experiment] [model]
 #   dataset:    iraven | cars3d | dsprites | shapes3d | mpi3d | clevr
 #   experiment: config name under configs/experiments (default: crm)
@@ -10,43 +15,44 @@ dataset=$1
 experiment=${2:-"crm"}
 model=${3:-"all"}
 
-SEEDS=(1 2 3)
+# set number of experiment repetitions
+SEEDS=(1 2 3 4 5)
 split=general_composition
 
 # DSPRITES
 if [ "$dataset" = "dsprites" ]; then
-    C=(0 1 2 3)
-    D=("[2,4,30,30]" "[2,3,14,14]" "[1,3,16,16]" "[1,1,4,4]")
+    C=(1)
+    D=("[2,3,14,14]")
     split_attributes="scale_shape_x-position_y-position"
 
 # IRAVEN
 elif [ "$dataset" = "iraven" ]; then
-    C=(0 1 2)
-    D=("[9,5,4]" "[6,3,3]" "[3,2,1]")
+    C=(1)
+    D=("[6,3,3]")
     split_attributes="size_type_color"
 
 # CARS3D
 elif [ "$dataset" = "cars3d" ]; then
-    C=(0 1 2)
-    D=("[26,3,160]" "[15,2,113]" "[6,1,43]")
+    C=(1)
+    D=("[15,2,113]")
     split_attributes="elevation_type_orientation"
 
 # SHAPES3D
 elif [ "$dataset" = "shapes3d" ]; then
-    C=(0 1 2 3 4)
-    D=("[9,9,9,7,3]" "[7,7,7,6,3]" "[6,5,6,5,2]" "[4,4,4,3,1]" "[2,2,1,1,1]")
+    C=(1)
+    D=("[7,7,7,6,3]")
     split_attributes="wall_floor_object_scale_shape"
 
 # CLEVR
 elif [ "$dataset" = "clevr" ]; then
-    C=(0 1 2 3)
-    D=("[2,2,1,7]" "[2,2,1,7]" "[2,1,1,3]"  "[1,1,1,1]")
+    C=(1)
+    D=("[2,2,1,7]")
     split_attributes="shape_size_material_color"
 
 # MPI3D
 elif [ "$dataset" = "mpi3d" ]; then
-    C=(0 1 2 3 4 5)
-    D=("[5,5,2,2,38,38]" "[5,4,2,2,34,34]" "[4,3,2,2,27,27]" "[3,4,1,2,22,22]" "[2,2,1,1,10,10]" "[1,1,1,1,1,1]")
+    C=(1)
+    D=("[5,4,2,2,34,34]")
     split_attributes="color_shape_height_bgcolor_x-axis_y-axis"
 
 else
@@ -64,12 +70,14 @@ fi
 for c in "${C[@]}"; do
     for model in "${all_models[@]}"; do
         for seed in "${SEEDS[@]}"; do
-            difficulty=${D[$c]}
+            difficulty=${D[0]}
             python main.py --experiment-cfg configs/experiments/${experiment}.yml \
             --data-cfg configs/datasets/${dataset}.yml --model-cfg configs/models/${model}.yml \
             data.training.targets=$split_attributes data.training.split_attributes=$split_attributes \
-            data.training.split=$split --seed=$seed  data.training.c=$c data.testing.c=$c logger.name=base \
-            data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty training.n_epoch=5
+            data.training.split=$split --seed=$seed  data.training.c=$c data.testing.c=$c \
+            data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty data.training.num_workers=0 data.testing.num_workers=0 \
+            training.trainer=crm \
+            logger.name=wandb path.base="$HOME"/storage/investigacion/licg/scalable-compositional-generalization/out
         done
     done
 done
