@@ -57,6 +57,7 @@ for c in "${C[@]}"; do
         data.training.split=$split data.testing.split=$split \
         data.training.c=$c data.testing.c=$c \
         data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty \
-        --seed=$seed data.training.num_workers=0 data.testing.num_workers=4 logger.name=wandb
+        --seed=$seed data.training.num_workers=0 data.testing.num_workers=4 logger.name=wandb \
+	path.base=/home/araymond/storage/investigacion/licg/scalable-compositional-generalization/out
     done
 done
