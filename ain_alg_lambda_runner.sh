@@ -12,7 +12,7 @@ if [ -z "$dataset" ] || [ -z "$experiment" ]; then
 fi
 
 # set number of experiment repetitions
-SEEDS=(1 2 3)
+SEEDS=(4 5)
 
 # define dataset-specific split attributes
 if [ "$dataset" = "dsprites" ]; then

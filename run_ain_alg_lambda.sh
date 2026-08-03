@@ -3,7 +3,7 @@
 #SBATCH --output=exp_logs/%x_%j.out
 #SBATCH --error=exp_logs/%x_%j.err
 #SBATCH --time=1-00:00:00
-#SBATCH --account=forgetting_pixels_learnin_vidt5
+#SBATCH --account=defaultacc
 #SBATCH --partition=peteroa-default
 #SBATCH --nodelist=peteroa
 #SBATCH --ntasks=1
