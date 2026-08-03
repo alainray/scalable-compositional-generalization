@@ -29,26 +29,91 @@ METRICS = [
     "val_4cases_embedding_dim",
 ]
 
+# Metricas post-hoc de CRM. No estan en el log de wandb (se calculan despues del
+# bucle de entrenamiento, fuera de cualquier bloque "Epoch [N]"), asi que hay
+# que leerlas de results.json.
+FINAL_METRICS = [
+    "final_test_crm_acc",
+    "final_test_crm_naive_acc",
+    "final_test_baseline_acc",
+    "final_val_crm_acc",
+    "final_val_crm_naive_acc",
+    "final_val_baseline_acc",
+]
+
+
+def read_final_metrics(path):
+    """Metricas post-hoc de CRM desde <run>/checkpoints/results.json.
+
+    Devuelve NaN para los runs que no son de CRM. Ojo: en el notebook hay que
+    anadirlas a METRIC_COLS, o pasan a formar parte de la clave de config.
+    """
+    out = {m: np.nan for m in FINAL_METRICS}
+    res_path = os.path.join(path, "checkpoints", "results.json")
+    if not os.path.exists(res_path):
+        return out
+    try:
+        with open(res_path, "r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return out
+    for m in FINAL_METRICS:
+        if m in data:
+            out[m] = data[m]
+    return out
+
+
 PARSE_LOG = True
 CORE_METRICS = ["train_acc", "val_acc", "ood_val_0_acc", "test_acc"]
 FLOAT_PATTERN = r"([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
 
 
 def find_wandb_log_path(path):
-    latest_run = os.path.join(path, "wandb", "latest-run", "files", "output.log")
-    if os.path.exists(latest_run):
-        return latest_run
+    """Newest ``output.log`` under ``<path>/wandb``.
+
+    Do NOT just trust ``wandb/latest-run``: when a run is aborted it can leave
+    ``latest-run`` behind as a real directory instead of a symlink, and every
+    later run in that folder then gets a ``latest-run.<pid>`` symlink instead.
+    Reading ``latest-run`` blindly would return the stale, epoch-less log and
+    silently shadow the good run.
+    """
     wandb_root = os.path.join(path, "wandb")
     if not os.path.isdir(wandb_root):
         return None
-    run_dirs = sorted(
-        [entry.path for entry in os.scandir(wandb_root) if entry.is_dir()]
-    )
-    for run_dir in reversed(run_dirs):
-        candidate = os.path.join(run_dir, "files", "output.log")
+    candidates = {}
+    for entry in os.scandir(wandb_root):
+        if not entry.is_dir():
+            continue
+        candidate = os.path.join(entry.path, "files", "output.log")
         if os.path.exists(candidate):
-            return candidate
-    return None
+            # several names (latest-run, latest-run.<pid>, run-<id>) can point
+            # at the same directory
+            candidates[os.path.realpath(candidate)] = os.path.getmtime(candidate)
+    if not candidates:
+        return None
+    return max(candidates, key=candidates.get)
+
+
+def load_epoch_metrics(path):
+    """Per-epoch metrics parsed out of the run's wandb log.
+
+    Raises if the run never logged a single epoch, so that the caller skips it
+    instead of emitting a row of NaNs (which would later blow up any
+    ``groupby(...).idxmax()`` over an architecture whose runs are all empty).
+    """
+    log_path = find_wandb_log_path(path)
+    if log_path is None:
+        raise FileNotFoundError(
+            f"No output.log found under {os.path.join(path, 'wandb')}"
+        )
+    with open(log_path, "r") as file:
+        log_data = file.read()
+    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    if not epoch_data:
+        raise ValueError(
+            f"No 'Epoch [N]' block in {log_path}; the run logged no epoch"
+        )
+    return epoch_data
 
 
 def select_best(train_data):
@@ -122,14 +187,7 @@ def select_best_val_acc_hoyer(train_data):
 
 
 def parse_training_metrics(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    epoch_data = load_epoch_metrics(path)
     best_epoch_results, curves = select_best(epoch_data)
     best_epoch_results["id_pscore"] = select_best_val_acc_pscore(epoch_data)
     best_epoch_results["id_sv_auc"] = select_best_val_acc_sv_auc(epoch_data)
@@ -200,51 +258,23 @@ def extract_epoch_metrics(log_data, extra_metrics=None):
     return epoch_data
 
 def parse_id(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    epoch_data = load_epoch_metrics(path)
     best_epoch_result = select_best_id(epoch_data)
     return best_epoch_result
 
 
 def parse_id_pscore(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    epoch_data = load_epoch_metrics(path)
     return select_best_val_acc_pscore(epoch_data)
 
 
 def parse_id_sv_auc(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    epoch_data = load_epoch_metrics(path)
     return select_best_val_acc_sv_auc(epoch_data)
 
 
 def parse_id_hoyer(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    epoch_data = load_epoch_metrics(path)
     return select_best_val_acc_hoyer(epoch_data)
 
 
@@ -292,7 +322,13 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="cars3d")
     parser.add_argument("--path", type=str, default="out/")
-    parser.add_argument("--experiment", type=str, default="orthotopic")
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="orthotopic",
+        help="carpeta(s) de experimento bajo --path; acepta una lista separada "
+             "por comas, p.ej. 'metrics,crm'",
+    )
     parser.add_argument("--split", type=str, default="composition_0.1")
     parser.add_argument(
         "--selection",
@@ -400,13 +436,24 @@ def main():
         "id_hoyer": parse_id_hoyer,
     }
     parse_result_fn = selection_to_fn.get(args.selection)
-    df = pd.DataFrame(columns=list(CFG_TO_COL.values())+METRICS)
-    base_path = os.path.join(args.path, args.experiment, args.dataset)
-    c_list = [ f.path for f in os.scandir(base_path) if f.is_dir() ]
+    df = pd.DataFrame(columns=list(CFG_TO_COL.values())+METRICS+FINAL_METRICS)
+    # --experiment acepta una lista separada por comas, para juntar en un mismo
+    # pkl runs que viven en carpetas de experimento distintas (p.ej. los de CRM
+    # bajo out/crm/ y el resto bajo out/metrics/)
+    c_list = []
+    for experiment in [e.strip() for e in args.experiment.split(",") if e.strip()]:
+        base_path = os.path.join(args.path, experiment, args.dataset)
+        if not os.path.isdir(base_path):
+            print(f"[warn] no existe {base_path}, se omite")
+            continue
+        c_list += [ f.path for f in os.scandir(base_path) if f.is_dir() ]
     print("Loading data...")
     parsed_int_cs = []
+    skipped = []
     for c_path in c_list:
         c = os.path.basename(c_path).split("_")[-1]
+        if not c.isdigit():
+            continue
         parsed_int_cs.append(int(c))
         models = [ f.path for f in os.scandir(c_path) if f.is_dir() ]
         for model_path in models:
@@ -428,15 +475,23 @@ def main():
                             res = parse_result_fn(r)
                         else:
                             res = process_experiment(r)[args.selection]
+                        res.update(read_final_metrics(r))
                         res["arch"] = model_name
                         res["c"] = c
                         res["seed"] = id
                         # append results
                         df = df._append(res, ignore_index = True) if not df.empty else pd.DataFrame([res])
                     except Exception as e:
-                        print(r)
-                        print(e)    
+                        # skipped rather than appended: a run with no parsable
+                        # epoch would otherwise become a row of NaNs and break
+                        # any later groupby(...).idxmax() over its arch
+                        skipped.append((r, str(e)))
+                        print(f"[skip] {r}\n        {e}")
     print("Data loaded.")
+    if skipped:
+        print(f"\n{len(skipped)} run(s) skipped:")
+        for r, e in skipped:
+            print(f"  {r}\n    {e}")
     check_arch_counts(df, max(parsed_int_cs))
     df.to_pickle(f"{args.dataset}_{args.selection}.pkl")
 

@@ -17,6 +17,6 @@ data:
   training:
     # the group softmax materialises a (batch, num_train_groups) tensor with
     # autograd; on mpi3d that is ~1.2 GB at batch 256
-    batch_size: 256
+    batch_size: 1024
   testing:
     batch_size: 1024

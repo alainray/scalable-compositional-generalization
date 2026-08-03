@@ -21,6 +21,8 @@ from visgen.models.crm import (
     crm_group_energy,
     crm_group_logits,
 )
+from visgen.models.losses import AttributeCrossEntropyLoss
+from visgen.models.metrics import MultiAccuracy
 
 ATTRIBUTE_SIZES = [3, 4, 2]
 
@@ -289,3 +291,236 @@ def test_b_star_changes_predictions():
     naive_codes = {tuple(g.tolist()) for g in naive}
     assert naive_codes <= {tuple(g) for g in seen.tolist()}
     assert not torch.equal(naive, extrapolated)
+
+
+# -- CRM combined with the analogical (algebraic) mixer term --------------
+
+
+class _FakeSplitMixer(torch.nn.Module):
+    """Minimal stand-in for SplitResNet18Mixer's CRM-facing surface.
+
+    Mirrors `crm_outputs`: one encoder pass yields both the per-attribute logits
+    over the flattened `batch * views` rows and the parallelogram residual over
+    the per-view representations.
+    """
+
+    def __init__(self, attribute_sizes, rep_dim=6):
+        super().__init__()
+        self.attributes = [f"a{i}" for i in range(len(attribute_sizes))]
+        self.attribute_sizes = attribute_sizes
+        self.objective = "classification"
+        self.loss_fn = AttributeCrossEntropyLoss()
+        self.metric_fns = [MultiAccuracy()]
+        self.mixer_mode = "algebraic"
+        self.algebraic_use_all_terms = True
+        self.mixer_loss_weight = 1.0
+        self.encoder = torch.nn.Linear(rep_dim, rep_dim, bias=False)
+        self.heads = torch.nn.ModuleList(
+            [torch.nn.Linear(rep_dim, s, bias=False) for s in attribute_sizes]
+        )
+        self.calls = 0
+
+    def _reps(self, x_flat):
+        self.calls += 1
+        return self.encoder(x_flat)
+
+    def forward(self, x):
+        if x.dim() == 3:
+            x = x.reshape(-1, x.shape[-1])
+        reps = self._reps(x)
+        return [h(reps) for h in self.heads]
+
+    def mixer_loss_from_reps(self, reps, y=None):
+        residual = reps[:, 0] - reps[:, 1] - reps[:, 2] + reps[:, 3]
+        loss = residual.pow(2).mean()
+        return 4.0 * loss if self.algebraic_use_all_terms else loss
+
+    def crm_outputs(self, x, y=None):
+        if x.dim() == 3:
+            b, v = x.shape[:2]
+            reps_flat = self._reps(x.reshape(b * v, -1))
+            logits = [h(reps_flat) for h in self.heads]
+            return logits, self.mixer_loss_from_reps(reps_flat.view(b, v, -1), y)
+        reps = self._reps(x)
+        return [h(reps) for h in self.heads], torch.zeros((), device=x.device)
+
+
+def _four_view_batch(support, batch=5, rep_dim=6, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    x = torch.randn(batch, 4, rep_dim, generator=g)
+    groups = support.train_groups
+    idx = torch.randint(0, len(groups), (batch, 4), generator=g)
+    y = groups[idx].unsqueeze(2)  # (batch, 4, 1, m) -- the object axis
+    return x, y
+
+
+def test_aux_weight_requires_model_support():
+    support = GroupSupport.from_targets(
+        full_product_targets(ATTRIBUTE_SIZES), ATTRIBUTE_SIZES
+    )
+    plain = _LinearAED(
+        [torch.randn(4, s) for s in ATTRIBUTE_SIZES],
+        [f"a{i}" for i in range(3)],
+        ATTRIBUTE_SIZES,
+    )
+    with pytest.raises(ValueError, match="crm_outputs"):
+        CRMWrapper(plain, support, aux_loss_weight=1.0)
+
+
+def test_crm_outputs_matches_forward_and_runs_encoder_once():
+    sizes = [3, 2]
+    support = GroupSupport.from_targets(full_product_targets(sizes), sizes)
+    model = _FakeSplitMixer(sizes)
+    x, _ = _four_view_batch(support)
+
+    model.calls = 0
+    via_forward = model(x)
+    assert model.calls == 1
+
+    model.calls = 0
+    via_crm, aux = model.crm_outputs(x)
+    assert model.calls == 1  # no second encoder pass for the auxiliary term
+
+    for a, b in zip(via_forward, via_crm):
+        assert torch.allclose(a, b, atol=1e-6)
+    assert aux.item() > 0.0
+
+
+def test_aux_term_enters_total_loss_with_its_weight():
+    sizes = [3, 2]
+    support = GroupSupport.from_targets(full_product_targets(sizes), sizes)
+    model = _FakeSplitMixer(sizes)
+    x, y = _four_view_batch(support, seed=1)
+
+    off = CRMWrapper(model, support, report_baseline_metrics=False)
+    on = CRMWrapper(model, support, report_baseline_metrics=False, aux_loss_weight=2.5)
+
+    energies, aux = on.energies_and_aux(x, y)
+    crm_loss, _ = on._compute_loss(energies, y)
+
+    log_off = off.validation_step(x=x, y=y)
+    log_on = on.validation_step(x=x, y=y)
+
+    # the group cross-entropy itself is untouched by the auxiliary term
+    assert abs(log_off["loss"] - log_on["loss"]) < 1e-5
+    # ... and total_loss is exactly crm_loss + w * aux
+    assert "mixer_loss" not in log_off
+    assert abs(log_on["mixer_loss"] - aux.item()) < 1e-5
+    assert abs(log_on["total_loss"] - (crm_loss.item() + 2.5 * aux.item())) < 1e-4
+
+
+def test_aux_term_reaches_the_encoder_gradient():
+    sizes = [3, 2]
+    support = GroupSupport.from_targets(full_product_targets(sizes), sizes)
+    x, y = _four_view_batch(support, seed=2)
+
+    grads = {}
+    for weight in (0.0, 5.0):
+        model = _FakeSplitMixer(sizes)
+        torch.manual_seed(0)
+        with torch.no_grad():
+            model.encoder.weight.copy_(torch.eye(6) + 0.1)
+        wrapper = CRMWrapper(
+            model, support, report_baseline_metrics=False, aux_loss_weight=weight
+        )
+        energies, aux = wrapper.energies_and_aux(x, y)
+        loss, _ = wrapper._compute_loss(energies, y)
+        (loss + weight * aux).backward()
+        grads[weight] = model.encoder.weight.grad.clone()
+
+    assert not torch.allclose(grads[0.0], grads[5.0], atol=1e-6)
+
+
+def test_four_view_targets_align_with_flattened_logits():
+    """y is (B, 4, 1, m); it must flatten to the same B*4 rows as the logits."""
+    sizes = [3, 2]
+    support = GroupSupport.from_targets(full_product_targets(sizes), sizes)
+    model = _FakeSplitMixer(sizes)
+    wrapper = CRMWrapper(
+        model, support, report_baseline_metrics=False, aux_loss_weight=1.0
+    )
+    x, y = _four_view_batch(support, batch=7, seed=3)
+
+    energies, _ = wrapper.energies_and_aux(x, y)
+    targets = wrapper._flatten_targets(y)
+    assert energies[0].shape[0] == 7 * 4
+    assert targets.shape == (7 * 4, 2)
+    assert bool((support.train_index(targets) >= 0).all())
+
+
+def _real_split_mixer(attribute_sizes, mixer_mode="algebraic"):
+    """A real SplitResNet18Mixer, small enough to run on CPU."""
+    from torch import nn
+
+    from visgen.models.ain import SplitResNet18Mixer
+
+    return SplitResNet18Mixer(
+        in_channels=1,
+        out_dim=512,
+        maxpool=1,
+        split_layers=0,
+        preprocessing=None,
+        head=None,
+        attributes=[f"a{i}" for i in range(len(attribute_sizes))],
+        attribute_sizes=attribute_sizes,
+        objective="classification",
+        loss_fn=AttributeCrossEntropyLoss(),
+        metric_fns=[MultiAccuracy()],
+        activation=nn.ReLU(inplace=True),
+        mixer_mode=mixer_mode,
+        mixer_loss_weight=1.0,
+        head_bias=False,
+    )
+
+
+def test_real_split_mixer_crm_outputs_match_forward():
+    torch.manual_seed(0)
+    sizes = [3, 2]
+    model = _real_split_mixer(sizes).eval()
+    x = torch.randn(2, 4, 1, 32, 32)
+
+    with torch.no_grad():
+        logits_crm, aux = model.crm_outputs(x)
+        # forward() keeps only the last view, so compare against that slice
+        logits_fwd = model(x)
+    assert logits_crm[0].shape == (8, 3)
+    for i in range(len(sizes)):
+        assert torch.allclose(logits_crm[i][3::4], logits_fwd[i], atol=1e-5)
+    assert torch.isfinite(aux) and aux.item() > 0.0
+
+
+def test_real_split_mixer_algebraic_term_is_the_parallelogram_residual():
+    torch.manual_seed(1)
+    sizes = [3, 2]
+    model = _real_split_mixer(sizes).eval()
+    x = torch.randn(2, 4, 1, 32, 32)
+
+    with torch.no_grad():
+        _, reps_flat, _ = model._encode_split(x.reshape(8, 1, 32, 32))
+        reps = reps_flat.view(2, 4, -1)
+        residual = reps[:, 0] - reps[:, 1] - reps[:, 2] + reps[:, 3]
+        expected = 4.0 * residual.pow(2).mean()  # algebraic_use_all_terms=True
+        _, aux = model.crm_outputs(x)
+    assert torch.allclose(aux, expected, atol=1e-6)
+
+
+def test_real_split_mixer_refactor_preserves_compute_losses():
+    """_compute_losses must still return the same mixer term after the refactor."""
+    torch.manual_seed(2)
+    sizes = [3, 2]
+    model = _real_split_mixer(sizes).eval()
+    x = torch.randn(2, 4, 1, 32, 32)
+    y = torch.zeros(2, 4, 1, 2, dtype=torch.long)
+
+    with torch.no_grad():
+        _, mixer_loss, _ = model._compute_losses(x, y)
+        _, aux = model.crm_outputs(x, y)
+    assert torch.allclose(mixer_loss, aux, atol=1e-6)
+
+
+def test_real_split_mixer_without_four_views_has_no_aux_term():
+    torch.manual_seed(3)
+    model = _real_split_mixer([3, 2]).eval()
+    with torch.no_grad():
+        _, aux = model.crm_outputs(torch.randn(4, 1, 32, 32))
+    assert aux.item() == 0.0

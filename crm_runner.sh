@@ -16,7 +16,7 @@ experiment=${2:-"crm"}
 model=${3:-"all"}
 
 # set number of experiment repetitions
-SEEDS=(1 2 3 4 5)
+SEEDS=(3 4 5)
 split=general_composition
 
 # DSPRITES
@@ -60,7 +60,7 @@ else
     exit 1
 fi
 
-crm_models=("crm_resnet18" "crm_split_resnet_mixer")
+crm_models=("crm_resnet18" "crm_split_resnet" "crm_split_resnet_mixer")
 if [ "$model" = "all" ]; then
     all_models=("${crm_models[@]}")
 else
@@ -69,10 +69,16 @@ fi
 
 for c in "${C[@]}"; do
     for model in "${all_models[@]}"; do
+        # the analogical term needs 4-view batches, which only the non_iid
+        # dataset configs produce
+        case "$model" in
+            *_mixer) data_cfg="configs/datasets/${dataset}_non_iid.yml" ;;
+            *)       data_cfg="configs/datasets/${dataset}.yml" ;;
+        esac
         for seed in "${SEEDS[@]}"; do
             difficulty=${D[0]}
             python main.py --experiment-cfg configs/experiments/${experiment}.yml \
-            --data-cfg configs/datasets/${dataset}.yml --model-cfg configs/models/${model}.yml \
+            --data-cfg "$data_cfg" --model-cfg configs/models/${model}.yml \
             data.training.targets=$split_attributes data.training.split_attributes=$split_attributes \
             data.training.split=$split --seed=$seed  data.training.c=$c data.testing.c=$c \
             data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty data.training.num_workers=0 data.testing.num_workers=0 \

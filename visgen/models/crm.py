@@ -331,6 +331,13 @@ class CRMWrapper(BaseModel):
     The wrapped model must return a list of per-attribute logit tensors from its
     ``forward``. The wrapper owns the learnable per-group bias ``B_hat`` and,
     after the post-hoc step, the extrapolated bias ``B_star``.
+
+    This replaces the wrapped model's ``train_step`` entirely, so an auxiliary
+    objective is only applied if the model exposes ``crm_outputs`` (see
+    ``SplitResNet18Mixer``) *and* ``aux_loss_weight`` is non-zero, in which case
+    the total is ``crm_group_ce + aux_loss_weight * aux``. Anything else the
+    model computes inside its own ``train_step`` is dropped -- notably the
+    ``exit_reg`` early-exit loss of ``SplitResNet18``.
     """
 
     def __init__(
@@ -341,6 +348,7 @@ class CRMWrapper(BaseModel):
         report_baseline_metrics: bool = True,
         group_chunk: int = DEFAULT_GROUP_CHUNK,
         crm_metrics_on_train: bool = False,
+        aux_loss_weight: float = 0.0,
     ):
         super().__init__(
             attributes=base_model.attributes,
@@ -358,6 +366,15 @@ class CRMWrapper(BaseModel):
         # backbone itself, so it is off during training by default; the metrics
         # that matter (val/test) are unaffected.
         self.crm_metrics_on_train = crm_metrics_on_train
+        # Weight of the wrapped model's compositional term (mixer / algebraic).
+        # 0 disables it entirely, which is the plain-CRM behaviour.
+        self.aux_loss_weight = float(aux_loss_weight)
+        if self.aux_loss_weight != 0.0 and not hasattr(base_model, "crm_outputs"):
+            raise ValueError(
+                f"aux_loss_weight={aux_loss_weight} was requested but "
+                f"{type(base_model).__name__} does not implement crm_outputs(); "
+                "CRM has no auxiliary term to combine with"
+            )
         self.attribute_sizes = support.attribute_sizes
 
         self.b_hat = nn.Parameter(torch.zeros(support.num_train_groups))
@@ -372,6 +389,8 @@ class CRMWrapper(BaseModel):
         self._logged_metrics += ["crm_acc", "crm_naive_acc"]
         if report_baseline_metrics:
             self._logged_metrics += ["baseline_acc"]
+        if self.aux_loss_weight != 0.0:
+            self._logged_metrics += ["mixer_loss", "total_loss"]
 
     # -- plumbing ----------------------------------------------------------
 
@@ -394,17 +413,31 @@ class CRMWrapper(BaseModel):
     def extract_representation(self, x):
         return self.base_model.extract_representation(x)
 
-    def energies(self, x):
-        """Per-attribute logits of the wrapped model, as a list of ``(B, d_i)``."""
-        if x.dim() == 5:
-            x = x.reshape(-1, *x.shape[2:])
-        out = self.base_model(x)
+    def energies_and_aux(self, x, y=None):
+        """``(per-attribute logits, auxiliary loss)`` from a single encoder pass.
+
+        If the wrapped model exposes ``crm_outputs`` (see
+        ``SplitResNet18Mixer.crm_outputs``) its compositional term is returned
+        alongside the logits, so CRM can be combined with it without running the
+        encoder twice. Otherwise the auxiliary loss is zero.
+        """
+        if self.aux_loss_weight != 0.0 and hasattr(self.base_model, "crm_outputs"):
+            out, aux = self.base_model.crm_outputs(x, y)
+        else:
+            if x.dim() == 5:
+                x = x.reshape(-1, *x.shape[2:])
+            out = self.base_model(x)
+            aux = torch.zeros((), device=out[0].device if out else self.b_hat.device)
         if not isinstance(out, (list, tuple)):
             raise TypeError(
                 f"{type(self.base_model).__name__}.forward must return a list of "
                 "per-attribute logits for CRM"
             )
-        return list(out)
+        return list(out), aux
+
+    def energies(self, x):
+        """Per-attribute logits of the wrapped model, as a list of ``(B, d_i)``."""
+        return self.energies_and_aux(x)[0]
 
     def forward(self, x):
         return self.energies(x)
@@ -550,23 +583,31 @@ class CRMWrapper(BaseModel):
         divisor = max(1, grad_accum_steps)
         if amp_scaler:
             with torch.amp.autocast("cuda"):
-                energies = self.energies(x)
+                energies, aux = self.energies_and_aux(x, y)
             # the group softmax itself always runs in float32: a logsumexp over
             # up to 5e5 terms is not safe in half precision
             loss, targets = self._compute_loss(energies, y)
-            amp_scaler.scale(loss / divisor).backward()
+            total = loss + self.aux_loss_weight * aux.float()
+            amp_scaler.scale(total / divisor).backward()
             if step_optimizer:
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    self.parameters(), max_norm=1e3
-                )
-                if grad_norm.isfinite():
-                    amp_scaler.step(optimizer)
-                    amp_scaler.update()
+                # `unscale_` before clipping, or the norm is measured on the
+                # scaled gradients (scale * true norm) and the clip threshold is
+                # meaningless. Then always call step()/update(): the scaler
+                # skips the step itself when it finds inf/nan, and update() is
+                # what backs the scale off afterwards. Gating update() behind a
+                # finiteness check deadlocks training -- the scale never
+                # decreases, so every later step overflows too and the model
+                # stops updating for the rest of the run.
+                amp_scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1e3)
+                amp_scaler.step(optimizer)
+                amp_scaler.update()
                 optimizer.zero_grad(set_to_none=True)
         else:
-            energies = self.energies(x)
+            energies, aux = self.energies_and_aux(x, y)
             loss, targets = self._compute_loss(energies, y)
-            (loss / divisor).backward()
+            total = loss + self.aux_loss_weight * aux.float()
+            (total / divisor).backward()
             if step_optimizer:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.parameters(), max_norm=1e3
@@ -575,18 +616,26 @@ class CRMWrapper(BaseModel):
                     optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
         with torch.no_grad():
-            return self._log_dict(
+            log_dict = self._log_dict(
                 loss.detach(),
                 [e.detach().float() for e in energies],
                 targets,
                 crm_metrics=self.crm_metrics_on_train,
             )
+            return log_dict | self._aux_log(aux, total)
 
     @torch.no_grad()
     def validation_step(self, x, y=None, **kwargs):
-        energies = [e.float() for e in self.energies(x)]
+        energies, aux = self.energies_and_aux(x, y)
+        energies = [e.float() for e in energies]
         loss, targets = self._compute_loss(energies, y, grad=False)
-        return self._log_dict(loss, energies, targets)
+        log_dict = self._log_dict(loss, energies, targets)
+        return log_dict | self._aux_log(aux, loss + self.aux_loss_weight * aux.float())
+
+    def _aux_log(self, aux, total):
+        if self.aux_loss_weight == 0.0:
+            return {}
+        return {"mixer_loss": aux.item(), "total_loss": total.item()}
 
     # -- step 2: extrapolated bias ----------------------------------------
 

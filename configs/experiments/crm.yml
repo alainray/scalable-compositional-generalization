@@ -13,10 +13,13 @@ training:
   metrics:
     - name: multi_accuracy
   if_exists: retrain
-  # `wio_acc` uses the baseline (per-attribute argmax) rule; the CRM decision
-  # rule is reported alongside as val_crm_acc / test_crm_acc, and the final
-  # post-hoc numbers land in results.json as final_*_crm_acc.
-  selection_metric: wio_acc
+  # Same criterion as metrics.yml / the other experiments, so that every row of
+  # the results table is model-selected the same way. It also uses the baseline
+  # (per-attribute argmax) rule; the CRM decision rule is reported alongside as
+  # val_crm_acc / test_crm_acc, and the post-hoc numbers land in results.json
+  # as final_*_crm_acc -- those are frozen to whichever checkpoint this metric
+  # selects, since step 2 runs once on `model_best`.
+  selection_metric: val_acc
   representation_metrics:
     enabled: False
   crm:

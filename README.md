@@ -111,6 +111,31 @@ per-attribute argmax). The post-hoc numbers are written to `results.json` under
 > *combinations*. The orthotopic split with `c=0` removes whole attribute values
 > from training, which is outside that assumption; use `c >= 1`.
 
+### Combining CRM with the analogical term
+
+`crm_split_resnet_mixer` trains
+
+```
+total = crm_group_cross_entropy  +  loss_weight * ||rep_ac - rep_ad - rep_bc + rep_bd||^2
+```
+
+i.e. CRM plus the parallelogram (analogical) term over the Split
+representations. The weight comes from the model config's own
+`mixer.loss_weight`, the same knob that governs it outside CRM;
+`training.crm.aux_loss_weight` overrides it. Both terms share a single encoder
+pass via `SplitResNet18Mixer.crm_outputs`, so the auxiliary term is nearly free.
+
+This requires 4-view batches, so `crm_runner.sh` automatically selects the
+`*_non_iid.yml` dataset config for any model whose name ends in `_mixer`. Note
+that step 2 deliberately runs on the *unwrapped* training loader: `B_star` is an
+expectation over `p(x)`, and the 4-view wrapper resamples quadruples, which
+would reweight the importance-sampling proposal.
+
+> ⚠️ Auxiliary terms other than the mixer's are still dropped: `CRMWrapper`
+> replaces `train_step`, so the Split early-exit regulariser (`exit_reg`) never
+> applies. `crm_resnet18` and `crm_split_resnet` are plain CRM
+> (`aux_loss_weight = 0`).
+
 ---
 
 ## 📊 Reproducing Results

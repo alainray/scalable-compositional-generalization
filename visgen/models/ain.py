@@ -1,4 +1,4 @@
-import torch 
+import torch
 from torch import nn
 
 from .resnet import ResNet, BasicBlock
@@ -19,7 +19,9 @@ class SplitResNet18(ResNet):
             layers=[2, 2, 2, 2],
             **kwargs,
         )
-        assert split_layers >= 0 and split_layers <= 4, "split layers must be between 0 and 4"
+        assert (
+            split_layers >= 0 and split_layers <= 4
+        ), "split layers must be between 0 and 4"
 
         if self.replace_stride_with_dilation is None:
             replace_stride_with_dilation = [False, False, False]
@@ -53,38 +55,38 @@ class SplitResNet18(ResNet):
                     bias=False,
                 )
                 maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-            
+
             bn1 = self._norm_layer(self.inplanes)
 
-            split_block = [
-                conv1, bn1, self.activation, maxpool
-            ]
+            split_block = [conv1, bn1, self.activation, maxpool]
             for i in range(self.split_layers):
                 if i == 0:
                     dilate = False
                     stride = 1
                 else:
-                    dilate = replace_stride_with_dilation[i-1]
+                    dilate = replace_stride_with_dilation[i - 1]
                     stride = 2
-                
+
                 li = self._make_layer(
-                    self.block, 
-                    self.layer_planes[i], 
-                    self.layers[i], 
-                    self.activation, 
-                    stride=stride, 
-                    dilate=dilate, 
-                    skip_init=self.skip_init
+                    self.block,
+                    self.layer_planes[i],
+                    self.layers[i],
+                    self.activation,
+                    stride=stride,
+                    dilate=dilate,
+                    skip_init=self.skip_init,
                 )
                 split_block.append(li)
 
             if self.split_layers == 4:
                 split_block.append(nn.AdaptiveAvgPool2d((1, 1)))
-            
+
             split_blocks.append(nn.Sequential(*split_block))
-            
+
         self.split_block = nn.ModuleList(split_blocks)
-        self.exit_head = nn.Linear(self.exit_head_in_channels, sum(self.attribute_sizes))
+        self.exit_head = nn.Linear(
+            self.exit_head_in_channels, sum(self.attribute_sizes)
+        )
         self.exit_avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         # By default this model reads logits straight off the 512-d branch
@@ -108,20 +110,20 @@ class SplitResNet18(ResNet):
                 dilate = False
                 stride = 1
             else:
-                dilate = replace_stride_with_dilation[i-1]
+                dilate = replace_stride_with_dilation[i - 1]
                 stride = 2
-            
+
             shared_block = self._make_layer(
-                self.block, 
-                self.layer_planes[i], 
-                self.layers[i], 
-                self.activation, 
-                stride=stride, 
-                dilate=dilate, 
-                skip_init=self.skip_init
+                self.block,
+                self.layer_planes[i],
+                self.layers[i],
+                self.activation,
+                stride=stride,
+                dilate=dilate,
+                skip_init=self.skip_init,
             )
             shared_blocks.append(shared_block)
-        
+
         if len(shared_blocks) > 0:
             shared_blocks.append(nn.AdaptiveAvgPool2d((1, 1)))
 
@@ -159,7 +161,7 @@ class SplitResNet18(ResNet):
         _, rep, _ = self._encode_split(x)
         return rep
 
-    def forward(self, x, mode='test'):
+    def forward(self, x, mode="test"):
         x_split, _, h = self._encode_split(x)
 
         # early exit embeddings
@@ -170,7 +172,7 @@ class SplitResNet18(ResNet):
 
         if self.objective == "classification":
             # split output into separate list per attribute
-            h_split = torch.split(h, h.shape[0]//len(self.attribute_sizes), dim=0)
+            h_split = torch.split(h, h.shape[0] // len(self.attribute_sizes), dim=0)
             logits_x, logits_h = [], []
             j = 0
             for i, n in enumerate(self.attribute_sizes):
@@ -183,9 +185,9 @@ class SplitResNet18(ResNet):
                 logits_h.append(logits_hi)
                 j += n
 
-        if mode=='train':
+        if mode == "train":
             return logits_x, logits_h
-        
+
         return logits_x
 
     def train_step(self, x, y, optimizer, amp_scaler=None, **kwargs):
@@ -195,7 +197,7 @@ class SplitResNet18(ResNet):
         scaled_loss_divisor = max(1, grad_accum_steps)
         if amp_scaler:
             with torch.cuda.amp.autocast():
-                yp, yhp = self(x, 'train')
+                yp, yhp = self(x, "train")
                 # main loss
                 yloss, attr_loss = self.loss_fn(yp, y)
                 hloss, _ = self.loss_fn(yhp, y)
@@ -297,7 +299,9 @@ class SplitResNet18Mixer(SplitResNet18):
         self._logged_metrics = self._logged_metrics + ["mixer_loss", "total_loss"]
 
     def _split_logits(self, x_split):
-        return [classifier(xi) for classifier, xi in zip(self.task_classifiers, x_split)]
+        return [
+            classifier(xi) for classifier, xi in zip(self.task_classifiers, x_split)
+        ]
 
     def _split_rep_chunks(self, rep):
         return torch.split(rep, self.out_dim, dim=1)
@@ -319,6 +323,78 @@ class SplitResNet18Mixer(SplitResNet18):
         log_dict = self._compose_logging_dict(loss, attr_loss, metrics, attr_metrics)
         return loss, log_dict
 
+    def mixer_loss_from_reps(self, reps, y=None):
+        """Auxiliary compositional term, given ``(batch, num_views, rep_dim)`` reps.
+
+        Factored out of ``_compute_losses`` so that it can be reused without
+        recomputing the encoder -- ``CRMWrapper`` needs exactly this term while
+        replacing the classification loss with the CRM group cross-entropy.
+        Returns a zero scalar when there are fewer than 4 views.
+        """
+        num_views = reps.shape[1]
+        mixer_loss = torch.zeros((), device=reps.device)
+        if num_views < 4:
+            return mixer_loss
+        if self.mixer_mode == "algebraic":
+            rep_ac = reps[:, 0, :]
+            rep_ad = reps[:, 1, :]
+            rep_bc = reps[:, 2, :]
+            rep_bd = reps[:, 3, :]
+            residual = rep_ac - rep_ad - rep_bc + rep_bd
+            algebraic_loss = (residual.pow(2)).mean()
+            if self.algebraic_use_all_terms:
+                mixer_loss = 4.0 * algebraic_loss
+            else:
+                mixer_loss = algebraic_loss
+        else:
+            if self.use_all_mixer_cases:
+                case_specs = [
+                    (3, [0, 1, 2]),
+                    (0, [2, 1, 0]),
+                    (1, [2, 3, 0]),
+                    (2, [1, 0, 3]),
+                ]
+            else:
+                case_specs = [(3, [0, 1, 2])]
+            mixer_terms = []
+            for target_idx, input_indices in case_specs:
+                mixer_inputs = reps[:, input_indices, :]
+                target_rep = reps[:, target_idx, :]
+                if self.mixer_detach_target:
+                    target_rep = target_rep.detach()
+                mixed_rep = self._project_rep_pieces(mixer_inputs)
+                mixed_rep = self.mixer(mixed_rep)
+                mixed_rep = self.mixer_output_projection(mixed_rep)
+                term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
+                if self.use_mixer_classifier and y is not None and y.dim() > 2:
+                    mixer_logits = self._split_logits(self._split_rep_chunks(mixed_rep))
+                    mixer_cls_loss, _ = self.loss_fn(mixer_logits, y[:, target_idx, :])
+                    term_loss = term_loss + mixer_cls_loss
+                if torch.isfinite(term_loss):
+                    mixer_terms.append(term_loss)
+            if mixer_terms:
+                mixer_loss = torch.stack(mixer_terms).mean()
+        if not torch.isfinite(mixer_loss):
+            mixer_loss = torch.zeros_like(mixer_loss)
+        return mixer_loss
+
+    def crm_outputs(self, x, y=None):
+        """``(per-attribute logits, auxiliary loss)`` from a single encoder pass.
+
+        The logits are over the flattened batch (``batch * num_views`` rows when
+        ``x`` carries 4-view groups), matching what ``CRMWrapper`` expects after
+        it flattens the targets the same way.
+        """
+        if x.dim() == 5:
+            batch_size, num_views = x.shape[:2]
+            x_flat = x.reshape(batch_size * num_views, *x.shape[2:])
+            x_split_flat, reps_flat, _ = self._encode_split(x_flat)
+            reps = reps_flat.view(batch_size, num_views, -1)
+            return self._split_logits(x_split_flat), self.mixer_loss_from_reps(reps, y)
+        x_split, reps, _ = self._encode_split(x)
+        zero = torch.zeros((), device=reps.device)
+        return self._split_logits(x_split), zero
+
     def _compute_losses(self, x, y):
         if x.dim() == 5:
             batch_size, num_views = x.shape[:2]
@@ -327,53 +403,7 @@ class SplitResNet18Mixer(SplitResNet18):
             x_split_flat, reps_flat, _ = self._encode_split(x_flat)
             cls_loss, log_dict = self._compute_classification(x_split_flat, y_flat)
             reps = reps_flat.view(batch_size, num_views, -1)
-            mixer_loss = torch.tensor(0.0, device=reps.device)
-            if num_views >= 4:
-                if self.mixer_mode == "algebraic":
-                    rep_ac = reps[:, 0, :]
-                    rep_ad = reps[:, 1, :]
-                    rep_bc = reps[:, 2, :]
-                    rep_bd = reps[:, 3, :]
-                    residual = rep_ac - rep_ad - rep_bc + rep_bd
-                    algebraic_loss = (residual.pow(2)).mean()
-                    if self.algebraic_use_all_terms:
-                        mixer_loss = 4.0 * algebraic_loss
-                    else:
-                        mixer_loss = algebraic_loss
-                else:
-                    if self.use_all_mixer_cases:
-                        case_specs = [
-                            (3, [0, 1, 2]),
-                            (0, [2, 1, 0]),
-                            (1, [2, 3, 0]),
-                            (2, [1, 0, 3]),
-                        ]
-                    else:
-                        case_specs = [(3, [0, 1, 2])]
-                    mixer_terms = []
-                    for target_idx, input_indices in case_specs:
-                        mixer_inputs = reps[:, input_indices, :]
-                        target_rep = reps[:, target_idx, :]
-                        if self.mixer_detach_target:
-                            target_rep = target_rep.detach()
-                        mixed_rep = self._project_rep_pieces(mixer_inputs)
-                        mixed_rep = self.mixer(mixed_rep)
-                        mixed_rep = self.mixer_output_projection(mixed_rep)
-                        term_loss = self.mixer_loss_fn(mixed_rep, target_rep)
-                        if self.use_mixer_classifier and y is not None and y.dim() > 2:
-                            mixer_logits = self._split_logits(
-                                self._split_rep_chunks(mixed_rep)
-                            )
-                            mixer_cls_loss, _ = self.loss_fn(
-                                mixer_logits, y[:, target_idx, :]
-                            )
-                            term_loss = term_loss + mixer_cls_loss
-                        if torch.isfinite(term_loss):
-                            mixer_terms.append(term_loss)
-                    if mixer_terms:
-                        mixer_loss = torch.stack(mixer_terms).mean()
-                if not torch.isfinite(mixer_loss):
-                    mixer_loss = torch.zeros_like(mixer_loss)
+            mixer_loss = self.mixer_loss_from_reps(reps, y)
             return cls_loss, mixer_loss, log_dict
 
         x_split, reps, _ = self._encode_split(x)

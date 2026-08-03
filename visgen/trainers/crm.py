@@ -15,12 +15,33 @@ Waterbirds drops 78.7 -> 55.7 without it), so ``crm_acc`` (with ``B_star``) and
 import os
 
 import torch
+from torch.utils.data import DataLoader
 
+from visgen.datasets.non_iid import NonIIDWrapper
 from visgen.models.crm import CRMWrapper, GroupSupport
 from visgen.utils.general import load_checkpoint
 
 from .optimizers import get_optimizer
 from .trainer import BaseTrainer
+
+
+def unwrapped_train_loader(loader):
+    """A loader over the same samples, without the ``NonIIDWrapper`` resampling.
+
+    ``B_star`` is an expectation over the training marginal ``p(x)``, so it must
+    be estimated with each training sample contributing once. The 4-view wrapper
+    resamples quadruples, which would silently reweight the proposal
+    distribution of the importance-sampling estimator.
+    """
+    dataset = loader.dataset
+    if not isinstance(dataset, NonIIDWrapper):
+        return loader
+    return DataLoader(
+        dataset.dataset,
+        batch_size=loader.batch_size * 4,
+        num_workers=loader.num_workers,
+        pin_memory=True,
+    )
 
 
 class CRMTrainer(BaseTrainer):
@@ -55,6 +76,12 @@ class CRMTrainer(BaseTrainer):
         )
         if writer is not None:
             writer.write(summary)
+        aux_weight = self._aux_loss_weight(model)
+        if aux_weight:
+            print(
+                f"[crm] auxiliary term active: "
+                f"{getattr(model, 'mixer_mode', '?')} x {aux_weight}"
+            )
         wrapped = CRMWrapper(
             model,
             support,
@@ -62,9 +89,24 @@ class CRMTrainer(BaseTrainer):
             report_baseline_metrics=self.report_baseline_metrics,
             group_chunk=self.group_chunk,
             crm_metrics_on_train=self.crm_metrics_on_train,
+            aux_loss_weight=aux_weight,
         ).to(self.device)
         self._support_summary = summary
         return wrapped
+
+    def _aux_loss_weight(self, model):
+        """Weight of the model's compositional term (mixer / algebraic) under CRM.
+
+        Defaults to the model config's own ``mixer.loss_weight`` -- the same knob
+        that governs it outside CRM -- and is 0 for models that expose no such
+        term. ``training.crm.aux_loss_weight`` overrides it.
+        """
+        override = self.crm_cfg.get("aux_loss_weight")
+        if override is not None:
+            return float(override)
+        if not hasattr(model, "crm_outputs"):
+            return 0.0
+        return float(getattr(model, "mixer_loss_weight", 0.0))
 
     @staticmethod
     def _attribute_sizes(model):
@@ -100,7 +142,7 @@ class CRMTrainer(BaseTrainer):
         if self.extrapolate_every <= 0 or i_epoch % self.extrapolate_every != 0:
             return {}
         stats = model.compute_extrapolated_bias(
-            d_dataloaders["training"],
+            unwrapped_train_loader(d_dataloaders["training"]),
             device=self.device,
             max_samples=self.extrapolate_samples,
             group_chunk=self.group_chunk,
@@ -110,6 +152,7 @@ class CRMTrainer(BaseTrainer):
     def finalize(self, model, d_dataloaders, savepath, best_ams, prefix=""):
         """Full ``B_star`` pass on the selected checkpoint, then a final eval."""
         model_best = os.path.join(savepath, "model_best.pth.tar")
+        epoch = None
         if os.path.exists(model_best):
             model, _, epoch, _ = load_checkpoint(model_best, model, None, self.device)
             print(f"[crm] step 2 on best checkpoint (epoch {epoch})")
@@ -117,7 +160,7 @@ class CRMTrainer(BaseTrainer):
             print("[crm] step 2 on the last-epoch model (no checkpoint on disk)")
 
         stats = model.compute_extrapolated_bias(
-            d_dataloaders["training"],
+            unwrapped_train_loader(d_dataloaders["training"]),
             device=self.device,
             max_samples=self.crm_cfg.get("final_extrapolate_num_samples"),
             group_chunk=self.group_chunk,
@@ -125,6 +168,23 @@ class CRMTrainer(BaseTrainer):
         )
         out = dict(stats)
         out |= getattr(self, "_support_summary", {})
+
+        # `model_best` is written during the training loop, when b_star is still
+        # zeros -- step 2 only runs here. Without this the extrapolated bias is
+        # used for the final_* metrics and then lost, so re-evaluating with the
+        # CRM decision rule later would mean redoing the whole pass over the
+        # training set.
+        crm_path = os.path.join(savepath, "model_crm.pth.tar")
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": None,
+                "best_ams": best_ams,
+            },
+            crm_path,
+        )
+        print(f"[crm] B* guardado en {crm_path}")
 
         model.eval()
         for name in ("validation", "testing"):
