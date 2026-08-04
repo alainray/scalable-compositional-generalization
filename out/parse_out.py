@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import traceback
 import pandas as pd
 import yaml
 import re
@@ -29,26 +30,111 @@ METRICS = [
     "val_4cases_embedding_dim",
 ]
 
+# Metricas post-hoc de CRM. No estan en el log de wandb (se calculan despues
+# del bucle de entrenamiento, fuera de cualquier bloque "Epoch [N]"), asi que
+# hay que leerlas de results.json.
+#   final_test_crm_acc        -> argmax conjunto con el sesgo extrapolado B*
+#   final_test_crm_naive_acc  -> control de la ablacion, con B_hat
+#   final_test_baseline_acc   -> argmax por atributo (misma regla que test_acc)
+FINAL_METRICS = [
+    "final_test_crm_acc",
+    "final_test_crm_naive_acc",
+    "final_test_baseline_acc",
+    "final_val_crm_acc",
+    "final_val_crm_naive_acc",
+    "final_val_baseline_acc",
+]
+
 PARSE_LOG = True
 CORE_METRICS = ["train_acc", "val_acc", "ood_val_0_acc", "test_acc"]
 FLOAT_PATTERN = r"([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
 
+# Columnas extra que se agregan a mano en los loops de parsing
+EXTRA_COLS = ["arch", "c", "seed", "dataset"]
+
+
+def read_final_metrics(path):
+    """Metricas post-hoc de CRM desde <run>/checkpoints/results.json.
+
+    Devuelve NaN para los runs que no son de CRM, que simplemente no tienen
+    esas claves. Ojo: para que el notebook no las trate como parte de la clave
+    de configuracion, hay que anadirlas a METRIC_COLS alli.
+    """
+    out = {m: np.nan for m in FINAL_METRICS}
+    res_path = os.path.join(path, "checkpoints", "results.json")
+    if not os.path.exists(res_path):
+        return out
+    try:
+        with open(res_path, "r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return out
+    for m in FINAL_METRICS:
+        if m in data:
+            out[m] = data[m]
+    return out
+
+
+def build_dataframe(rows, extra_cols=("arch", "c", "seed")):
+    """Construye el DataFrame final a partir de una lista de dicts.
+
+    Reemplaza el patron `df._append(...)` fila a fila, que ademas de estar
+    roto en pandas >= 3.0 era O(n^2) porque copiaba el frame en cada
+    iteracion.
+    """
+    cols = list(CFG_TO_COL.values()) + METRICS + FINAL_METRICS
+    for col in extra_cols:
+        if col not in cols:
+            cols.append(col)
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    # Mantiene el esquema esperado y conserva cualquier columna inesperada
+    ordered = cols + [c for c in df.columns if c not in cols]
+    return df.reindex(columns=ordered)
+
 
 def find_wandb_log_path(path):
-    latest_run = os.path.join(path, "wandb", "latest-run", "files", "output.log")
-    if os.path.exists(latest_run):
-        return latest_run
+    """output.log mas reciente bajo <path>/wandb.
+
+    No hay que fiarse de wandb/latest-run: cuando un run se aborta puede dejar
+    latest-run como directorio real en vez de symlink, y los runs posteriores
+    de esa carpeta pasan a tener latest-run.<pid>. Leer latest-run a ciegas
+    devolvia el log viejo y sin epocas, tapando el run bueno.
+    """
     wandb_root = os.path.join(path, "wandb")
     if not os.path.isdir(wandb_root):
         return None
-    run_dirs = sorted(
-        [entry.path for entry in os.scandir(wandb_root) if entry.is_dir()]
-    )
-    for run_dir in reversed(run_dirs):
-        candidate = os.path.join(run_dir, "files", "output.log")
+    candidates = {}
+    for entry in os.scandir(wandb_root):
+        if not entry.is_dir():
+            continue
+        candidate = os.path.join(entry.path, "files", "output.log")
         if os.path.exists(candidate):
-            return candidate
-    return None
+            # latest-run, latest-run.<pid> y run-<id> pueden apuntar al mismo sitio
+            candidates[os.path.realpath(candidate)] = os.path.getmtime(candidate)
+    if not candidates:
+        return None
+    return max(candidates, key=candidates.get)
+
+
+def _read_epoch_data(path):
+    """Carga el output.log de wandb y devuelve las metricas por epoca."""
+    log_path = find_wandb_log_path(path)
+    if log_path is None:
+        raise FileNotFoundError(
+            f"No output.log found under {os.path.join(path, 'wandb')}"
+        )
+    with open(log_path, "r") as file:
+        log_data = file.read()
+    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    if not epoch_data:
+        # Sin esto el run entra como fila de NaN y luego revienta cualquier
+        # groupby(...).idxmax() cuyo arch tenga todos los runs asi.
+        raise ValueError(
+            f"No 'Epoch [N]' block in {log_path}; el run no registro ninguna epoca"
+        )
+    return epoch_data
 
 
 def select_best(train_data):
@@ -78,7 +164,7 @@ def select_best(train_data):
                 bests[k] = (curr, v)
         met_vals.append(v["test_acc"])
         all.append(met_vals)
-    bests = {k: v[1] for k,v in bests.items()}
+    bests = {k: v[1] for k, v in bests.items()}
     return bests, np.array(all)
 
 
@@ -120,16 +206,8 @@ def select_best_val_acc_hoyer(train_data):
     )
 
 
-
 def parse_training_metrics(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
+    epoch_data = _read_epoch_data(path)
     best_epoch_results, curves = select_best(epoch_data)
     best_epoch_results["id_pscore"] = select_best_val_acc_pscore(epoch_data)
     best_epoch_results["id_sv_auc"] = select_best_val_acc_sv_auc(epoch_data)
@@ -138,6 +216,7 @@ def parse_training_metrics(path):
         with open(os.path.join(path, f"results_{metric}.json"), "w") as json_file:
             json.dump(dict(best_epoch_results[metric]), json_file, indent=4)
     return curves
+
 
 def _safe_nested_get(data, dotted_key):
     if not isinstance(data, dict):
@@ -164,6 +243,10 @@ def process_experiment(path):
     for eval in ["id", "ood", "wio", "oracle", "id_pscore", "id_sv_auc", "id_hoyer"]:
         # read files
         res_file_path = os.path.join(path, f"results_{eval}.json")
+        if not os.path.exists(res_file_path):
+            # falta este criterio en este run; no es motivo para descartarlo si
+            # el que se pidio si esta (el KeyError posterior lo dira claro)
+            continue
         with open(res_file_path, 'r') as file:
             metrics = json.load(file)
 
@@ -174,6 +257,7 @@ def process_experiment(path):
             tmp[m] = metrics.get(m, np.nan)
         extracted[eval] = tmp
     return extracted
+
 
 def select_best_id(train_data):
     best_epoch = None
@@ -199,72 +283,39 @@ def extract_epoch_metrics(log_data, extra_metrics=None):
         epoch_data[epoch_num] = parsed_metrics
     return epoch_data
 
+
 def parse_id(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
-    best_epoch_result = select_best_id(epoch_data)
-    return best_epoch_result
+    return select_best_id(_read_epoch_data(path))
 
 
 def parse_id_pscore(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
-    return select_best_val_acc_pscore(epoch_data)
+    return select_best_val_acc_pscore(_read_epoch_data(path))
 
 
 def parse_id_sv_auc(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
-    return select_best_val_acc_sv_auc(epoch_data)
+    return select_best_val_acc_sv_auc(_read_epoch_data(path))
 
 
 def parse_id_hoyer(path):
-    log_path = find_wandb_log_path(path)
-    if log_path is None:
-        raise FileNotFoundError(
-            f"No output.log found under {os.path.join(path, 'wandb')}"
-        )
-    with open(log_path, "r") as file:
-        log_data = file.read()
-    epoch_data = extract_epoch_metrics(log_data, extra_metrics=METRICS)
-    return select_best_val_acc_hoyer(epoch_data)
-
-
+    return select_best_val_acc_hoyer(_read_epoch_data(path))
 
 
 def elaborate_results(datasets, cfg_to_col, metrics, path, experiment, split, selection):
-    df = pd.DataFrame(columns=list(cfg_to_col.values())+metrics)
+    rows = []
+    curves = []
     for data in datasets:
         base_path = os.path.join(path, experiment, data, split)
-        models = [ f.path for f in os.scandir(base_path) if f.is_dir() ]
-        curves = []
+        models = [f.path for f in os.scandir(base_path) if f.is_dir()]
         for model_path in models:
-            model_name = os.path.basename(model_path).split(".")[0]
-            if model_name in ["resnet18_leaky", "resnet50_leaky", "ed_prelu", "densenet121_old"]: continue
+            model_name = os.path.basename(model_path)
+            if model_name in ["resnet18_leaky", "resnet50_leaky", "ed_prelu", "densenet121_old"]:
+                continue
             try:
-                combinations = [ f.path for f in os.scandir(model_path) if f.is_dir() ]
-            except:
+                combinations = [f.path for f in os.scandir(model_path) if f.is_dir()]
+            except OSError:
                 combinations = []
             for c in combinations:
-                runs = [ f.path for f in os.scandir(c) if f.is_dir() ]
+                runs = [f.path for f in os.scandir(c) if f.is_dir()]
                 for r in runs:
                     try:
                         # parse training logs
@@ -273,14 +324,12 @@ def elaborate_results(datasets, cfg_to_col, metrics, path, experiment, split, se
                         res = process_experiment(r)[selection]
                         res["arch"] = model_name
                         res["dataset"] = data
-                        # append results
-                        df = df._append(res, ignore_index = True) if not df.empty else pd.DataFrame([res])
-                    except Exception as e:
+                        rows.append(res)
+                    except Exception:
                         print(r)
-                        print(e)
+                        traceback.print_exc()
+    df = build_dataframe(rows, extra_cols=("arch", "dataset"))
     return df, curves
-
-
 
 
 def parse_args():
@@ -292,7 +341,13 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="cars3d")
     parser.add_argument("--path", type=str, default="out/")
-    parser.add_argument("--experiment", type=str, default="orthotopic")
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default="orthotopic",
+        help="carpeta(s) de experimento bajo --path; acepta una lista separada "
+             "por comas, p.ej. 'metrics,crm'",
+    )
     parser.add_argument("--split", type=str, default="composition_0.1")
     parser.add_argument(
         "--selection",
@@ -305,91 +360,84 @@ def parse_args():
 
 
 def read_training_out(datasets, cfg_to_col, metrics, path, experiment, split):
-    df = pd.DataFrame(columns=list(cfg_to_col.values())+metrics)
+    rows = []
     for data in datasets:
         base_path = os.path.join(path, experiment, data, split)
-        models = [ f.path for f in os.scandir(base_path) if f.is_dir() ]
-        curves = []
+        models = [f.path for f in os.scandir(base_path) if f.is_dir()]
         for model_path in models:
-            model_name = os.path.basename(model_path).split(".")[0]
-            if model_name in ["resnet18_leaky", "resnet50_leaky", "ed_prelu", "densenet121_old"]: continue
+            model_name = os.path.basename(model_path)
+            if model_name in ["resnet18_leaky", "resnet50_leaky", "ed_prelu", "densenet121_old"]:
+                continue
             try:
-                combinations = [ f.path for f in os.scandir(model_path) if f.is_dir() ]
-            except:
+                combinations = [f.path for f in os.scandir(model_path) if f.is_dir()]
+            except OSError:
                 combinations = []
             for c in combinations:
-                runs = [ f.path for f in os.scandir(c) if f.is_dir() ]
+                runs = [f.path for f in os.scandir(c) if f.is_dir()]
                 for r in runs:
                     try:
                         with open(os.path.join(r, "checkpoints", "results.json")) as f:
                             res = dict(json.load(f))
                         res["arch"] = model_name
                         res["dataset"] = data
-                        # append results
-                        df = df._append(res, ignore_index = True) if not df.empty else pd.DataFrame([res])
-                    except Exception as e:
+                        rows.append(res)
+                    except Exception:
                         print(r)
-                        print(e)   
+                        traceback.print_exc()
+    df = build_dataframe(rows, extra_cols=("arch", "dataset"))
     return df, None
 
 
-ARCHS = [
-    'convnext_base',
-    'convnext_small',
-    'convnext_tiny',
-    'densenet121',
-    'densenet121_pretrained',
-    'densenet161',
-    'densenet201',
-    'ed',
-    'mlp',
-    'resnet101',
-    'resnet101_pretrained',
-    'resnet152',
-    'resnet152_pretrained',
-    'resnet18',
-    'resnet50',
-    'swin_base',
-    'swin_tiny',
-    'wideresnet',
-]
-
-def check_arch_counts(df, max_c):
+def check_arch_counts(df, max_c, archs=None):
     print("\nArchitecture check")
     print("=" * 60)
     if df.empty or not {"arch", "c", "seed"}.issubset(df.columns):
-        print("❌ No parsed runs found; skipping architecture count checks.")
+        print("No parsed runs found; skipping architecture count checks.")
         print("=" * 60)
         return
-    arch_counts = df['arch'].value_counts()
+
+    work = df.dropna(subset=["arch", "c", "seed"]).copy()
+    work["c"] = work["c"].astype(int)
+    work["seed"] = work["seed"].astype(int)
+
+    # Las arquitecturas y semillas se derivan de los datos en vez de una
+    # lista fija, que quedaba desactualizada apenas se agregaba un modelo.
+    if archs is None:
+        archs = sorted(work["arch"].unique())
+    seeds = sorted(work["seed"].unique())
+    exp_runs = len(seeds) * (max_c + 1)
+
+    arch_counts = work["arch"].value_counts()
     all_ok = True
-    exp_runs = 3 * (max_c+1)
-    for arch in ARCHS:
-        count = arch_counts.get(arch, 0)
+    for arch in archs:
+        count = int(arch_counts.get(arch, 0))
         status = "OK" if count == exp_runs else f"NO ({count}, expected {exp_runs})"
-        dots = '.' * (50 - len(arch))
+        dots = "." * max(1, 50 - len(arch))
         print(f"{arch}{dots}{status}")
         if count != exp_runs:
             all_ok = False
     print("=" * 60)
     if all_ok:
-        print("✅ All architectures are fine.")
+        print("All architectures are fine.")
     else:
-        print("❌ Some architectures have incorrect counts.")
+        print("Some architectures have incorrect counts.")
 
     expected_combinations = set(
         (arch, c, seed)
-        for arch in ARCHS
+        for arch in archs
         for c in range(max_c + 1)
-        for seed in [1, 2, 3]
+        for seed in seeds
     )
-    present_combinations = set(df[['arch', 'c', 'seed']].itertuples(index=False, name=None))
-    present_combinations = set([(t[0], int(t[1]), int(t[2])) for t in present_combinations])
+    present_combinations = set(
+        work[["arch", "c", "seed"]].itertuples(index=False, name=None)
+    )
+    present_combinations = {(t[0], int(t[1]), int(t[2])) for t in present_combinations}
 
     missing = expected_combinations - present_combinations
     if missing:
-        print(f"❌ Missing {len(missing)} (arch, c, seed) combinations:\n")
+        print(f"Missing {len(missing)} (arch, c, seed) combinations:\n")
         print(" ".join(f'"{arch} {c} {seed}"' for arch, c, seed in sorted(missing)))
+
 
 def main():
     args, uknw = parse_args()
@@ -400,26 +448,40 @@ def main():
         "id_hoyer": parse_id_hoyer,
     }
     parse_result_fn = selection_to_fn.get(args.selection)
-    df = pd.DataFrame(columns=list(CFG_TO_COL.values())+METRICS)
-    base_path = os.path.join(args.path, args.experiment, args.dataset)
-    c_list = [ f.path for f in os.scandir(base_path) if f.is_dir() ]
+
+    rows = []
+    # --experiment acepta una lista separada por comas, para juntar en un mismo
+    # pkl runs que viven en carpetas de experimento distintas (p.ej. los de CRM
+    # bajo out/crm/ y el resto bajo out/metrics/)
+    experiments = [e.strip() for e in args.experiment.split(",") if e.strip()]
+    c_list = []
+    for experiment in experiments:
+        base_path = os.path.join(args.path, experiment, args.dataset)
+        if not os.path.isdir(base_path):
+            print(f"[warn] no existe {base_path}, se omite")
+            continue
+        c_list += [f.path for f in os.scandir(base_path) if f.is_dir()]
     print("Loading data...")
     parsed_int_cs = []
+    n_failed = 0
+    failures = []
     for c_path in c_list:
         c = os.path.basename(c_path).split("_")[-1]
+        if not c.isdigit():
+            continue
         parsed_int_cs.append(int(c))
-        models = [ f.path for f in os.scandir(c_path) if f.is_dir() ]
+        models = [f.path for f in os.scandir(c_path) if f.is_dir()]
         for model_path in models:
-            model_name = os.path.basename(model_path).split(".")[0]
+            model_name = os.path.basename(model_path)
             try:
-                combinations = [ f.path for f in os.scandir(model_path) if f.is_dir() ]
-            except:
+                combinations = [f.path for f in os.scandir(model_path) if f.is_dir()]
+            except OSError:
                 combinations = []
             for comb in combinations:
-                runs = [ f.path for f in os.scandir(comb) if f.is_dir() ]
+                runs = [f.path for f in os.scandir(comb) if f.is_dir()]
                 for r in runs:
                     try:
-                        id = os.path.basename(r).split("/")[-1]
+                        run_id = os.path.basename(r)
                         # parse training logs
                         if PARSE_LOG:
                             parse_training_metrics(r)
@@ -428,18 +490,30 @@ def main():
                             res = parse_result_fn(r)
                         else:
                             res = process_experiment(r)[args.selection]
+                        # metricas post-hoc de CRM: viven en results.json, no
+                        # en el log, asi que se anaden aparte
+                        res.update(read_final_metrics(r))
                         res["arch"] = model_name
                         res["c"] = c
-                        res["seed"] = id
-                        # append results
-                        df = df._append(res, ignore_index = True) if not df.empty else pd.DataFrame([res])
+                        res["seed"] = run_id
+                        rows.append(res)
                     except Exception as e:
-                        print(r)
-                        print(e)    
-    print("Data loaded.")
-    check_arch_counts(df, max(parsed_int_cs))
-    df.to_pickle(f"{args.dataset}_{args.selection}.pkl")
+                        # se descarta el run en vez de anadirlo: una fila sin
+                        # metricas se convierte en NaN y rompe el idxmax del
+                        # notebook. El pkl se genera igual con el resto.
+                        n_failed += 1
+                        failures.append((r, f"{type(e).__name__}: {e}"))
+                        print(f"[skip] {r}\n        {type(e).__name__}: {e}")
 
+    df = build_dataframe(rows)
+    print(f"Data loaded. {len(df)} runs parsed, {n_failed} failed.")
+    if failures:
+        print(f"\n{len(failures)} run(s) descartados (no entran al pkl):")
+        for path, err in failures:
+            print(f"  {path}\n    {err}")
+    check_arch_counts(df, max(parsed_int_cs) if parsed_int_cs else 0)
+    df.to_pickle(f"{args.dataset}_{args.selection}.pkl")
+    print(f"Escrito {args.dataset}_{args.selection}.pkl")
 
 
 if __name__ == "__main__":
