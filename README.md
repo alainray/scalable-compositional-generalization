@@ -66,6 +66,20 @@ To reproduce the training of the models, use the provided runner scripts:
 ./[orthotopic|pairwise]_runner.sh <dataset> <experiment> <model>
 ```
 
+### Multi-GPU training
+To enable multi-GPU training with `torch.nn.DataParallel`, set `training.multi_gpu: true`
+in your config (or override via CLI) and optionally provide a list of GPU IDs:
+
+```bash
+python main.py \
+  --base-cfg configs/base.yml \
+  --data-cfg configs/data/iraven.yml \
+  --model-cfg configs/models/resnet18.yml \
+  --experiment-cfg configs/experiments/orthotopic.yml \
+  --training.multi_gpu=true \
+  --training.multi_gpu_ids=[0,1]
+```
+
 ### Arguments:
 - `dataset`: Name of the dataset. One of: `iraven, dsprites, mpi3d, shapes3d, cars3d`.
 - `experiment`: Name of the experiment configuration file (omit `.yml` extension).
