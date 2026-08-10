@@ -18,11 +18,11 @@ training:
     lr: 0.0001
     weight_decay: 0.0
   representation_metrics:
-    enabled: False
+    enabled: True
     split: val_4cases
     keep_split_metrics: False
     every_n_epochs: 1
-    max_samples: null
+    max_samples: 5000
     pairwise_max_samples: null
     sampling_seed: 0
     variance_threshold: 0.9
