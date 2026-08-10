@@ -12,6 +12,8 @@ class SplitResNet18(ResNet):
         exit_reg=10,
         **kwargs,
     ):
+        if "activation" not in kwargs:
+            kwargs["activation"] = nn.ReLU(inplace=False)
         super().__init__(
             block=BasicBlock,
             layers=[2, 2, 2, 2],
