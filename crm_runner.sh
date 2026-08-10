@@ -6,17 +6,19 @@
 # forced to `crm` (a config with `trainer: base` would silently run the plain
 # trainer with no group head, no B_hat and no post-hoc step).
 #
-# Usage: ./crm_runner.sh <dataset> [experiment] [model]
+# Usage: ./crm_runner.sh <dataset> [experiment] [model] [seeds]
 #   dataset:    iraven | cars3d | dsprites | shapes3d | mpi3d | clevr
 #   experiment: config name under configs/experiments (default: crm)
 #   model:      config name under configs/models (default: all CRM models)
+#   seeds:      comma-separated list of seeds to run (default: 5)
+#               e.g. ./crm_runner.sh dsprites crm all 1,2,3
 
 dataset=$1
 experiment=${2:-"crm"}
 model=${3:-"all"}
+seeds=${4:-"5"}
 
-# set number of experiment repetitions
-SEEDS=(3 4 5)
+IFS=',' read -ra SEEDS <<< "$seeds"
 split=general_composition
 
 # DSPRITES
