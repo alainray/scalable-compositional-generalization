@@ -19,7 +19,10 @@ training:
     weight_decay: 0.0
   representation_metrics:
     enabled: True
-    split: val_4cases
+    # acepta un nombre o una lista de splits
+    split:
+      - val_4cases
+      - testing
     keep_split_metrics: False
     every_n_epochs: 1
     max_samples: 5000

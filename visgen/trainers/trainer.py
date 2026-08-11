@@ -66,20 +66,28 @@ class BaseTrainer:
         if isinstance(rep_metrics_cfg, bool):
             rep_metrics_cfg = {"enabled": rep_metrics_cfg}
         rep_metrics_enabled = rep_metrics_cfg.get("enabled", False)
-        rep_metrics_split = rep_metrics_cfg.get("split", "val_4cases")
+        # `split` accepts a single name or a list, so the same metrics can be
+        # measured on several splits (e.g. val_4cases and testing) within one
+        # run. Note that `max_samples` is a cap, not a target: a split with
+        # fewer samples than the cap contributes all of them, so the effective
+        # sample count can differ between splits.
+        rep_metrics_splits = rep_metrics_cfg.get("split", "val_4cases")
+        if isinstance(rep_metrics_splits, str):
+            rep_metrics_splits = [rep_metrics_splits]
+        else:
+            rep_metrics_splits = list(rep_metrics_splits)
         rep_metrics_keep_split_metrics = rep_metrics_cfg.get(
             "keep_split_metrics", False
         )
-        rep_metrics_split_raw = f"{rep_metrics_split}_raw"
         extra_eval_loaders = []
         eval_blacklist = {
             "training",
             "validation",
             "testing",
-            rep_metrics_split_raw,
         }
+        eval_blacklist |= {f"{s}_raw" for s in rep_metrics_splits}
         if rep_metrics_enabled and not rep_metrics_keep_split_metrics:
-            eval_blacklist.add(rep_metrics_split)
+            eval_blacklist |= set(rep_metrics_splits)
         eval_blacklist |= set(ood_val_keys)
         for key in sorted(d_dataloaders.keys()):
             if key in eval_blacklist:
@@ -234,10 +242,13 @@ class BaseTrainer:
                 rep_metrics_enabled
                 and i_epoch % max(rep_metrics_every, 1) == 0
             ):
-                rep_metrics_loader = d_dataloaders.get(
-                    rep_metrics_split_raw, d_dataloaders.get(rep_metrics_split)
-                )
-                if rep_metrics_loader is not None:
+                for rep_metrics_split in rep_metrics_splits:
+                    rep_metrics_loader = d_dataloaders.get(
+                        f"{rep_metrics_split}_raw",
+                        d_dataloaders.get(rep_metrics_split),
+                    )
+                    if rep_metrics_loader is None:
+                        continue
                     rep_metrics = compute_representation_metrics_on_loader(
                         model=model,
                         loader=rep_metrics_loader,
