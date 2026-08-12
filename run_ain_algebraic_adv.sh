@@ -14,7 +14,7 @@
 source ~/storage/torch/bin/activate
 cd ~/investigacion/scalable-compositional-generalization
 
-WANDB_DEBUG=1,WANDB_SILENT=false ./ain_algebraic_adv_runner.sh $ds adversarial $sampling
+WANDB_DEBUG=1,WANDB_SILENT=false ./ain_algebraic_adv_runner.sh $ds adversarial $sampling $seeds
 wait
 
 echo "Finished with job $SLURM_JOBID (seed=$SEED)"

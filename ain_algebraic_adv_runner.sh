@@ -4,15 +4,18 @@
 dataset=$1
 experiment=$2
 sampling=$3 # adversarial/unpredictable_target_1/unpredictable_target_2
+seeds=${4:-"1,2,3"} # comma- or space-separated list, e.g. 1,2,3 o "4 5"
 model="split_resnet_algebraic_non_iid"
 
 if [ -z "$dataset" ] || [ -z "$experiment" ]; then
-    echo "Usage: $0 <dataset> <experiment>"
+    echo "Usage: $0 <dataset> <experiment> [sampling] [seeds]"
+    echo "  seeds: comma-separated list of seeds to run (default: 1,2,3)"
+    echo "         e.g. $0 dsprites adversarial adversarial 4,5"
     exit 1
 fi
 
 # set number of experiment repetitions
-SEEDS=(1 2 3)
+IFS=', ' read -ra SEEDS <<< "$seeds"
 
 # define dataset-specific split attributes
 if [ "$dataset" = "dsprites" ]; then
