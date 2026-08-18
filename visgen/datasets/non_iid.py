@@ -167,10 +167,13 @@ class NonIIDWrapper(Dataset):
         num_unpredictable_attributes: int = 1,
         deterministic_sampling_strategy: str = "random",
         max_deterministic_resample_attempts: Optional[int] = None,
+        split_thresholds=None,
+        split_c: Optional[int] = None,
     ) -> None:
         self.dataset = dataset
         self.max_resample_attempts = max_resample_attempts
         self.rng = np.random.default_rng(seed)
+        self._base_seed = 0 if seed is None else int(seed)
         self.shared_other_attributes = shared_other_attributes
         self.sampling_mode = self._resolve_sampling_mode(sampling_mode, fully_iid)
         self.fully_iid = self.sampling_mode == "iid"
@@ -190,6 +193,7 @@ class NonIIDWrapper(Dataset):
         )
         self._targets, self._attribute_values = self._prepare_targets(dataset)
         self._index_by_target = self._build_index(self._targets)
+        self._init_support_rule(split_thresholds, split_c)
         self._deterministic_candidates: Optional[List[List[int]]] = None
         if self.fully_iid:
             self._attribute_indices = np.array([], dtype=int)
@@ -256,6 +260,193 @@ class NonIIDWrapper(Dataset):
             base_dataset = base_dataset.dataset
         return base_dataset, indices
 
+    # ---- muestreo constructivo -------------------------------------------
+    #
+    # Con el split ortotopico la pertenencia al soporte es contable:
+    #     z en soporte  <=>  #{i : z_i >= umbral_i} <= c
+    # Eso permite construir cuadrilateros y cuartas etiquetas validas en O(m),
+    # en vez de sortear a ciegas y barrer el dataset para comprobar.
+
+    def _init_support_rule(self, thresholds, c) -> None:
+        self._thr = None
+        self._support_c = None
+        if thresholds is None or c is None:
+            return
+        thr = np.asarray(thresholds)
+        # Solo aplicable si los umbrales cubren exactamente las columnas de
+        # _targets, y para c en {0, 1} (los que usan los runners).
+        if thr.shape[0] != self._targets.shape[1] or int(c) not in (0, 1):
+            return
+        self._thr = thr
+        self._support_c = int(c)
+        self._easy = [
+            [int(v) for v in self._attribute_values[k] if v < thr[k]]
+            for k in range(self._targets.shape[1])
+        ]
+        self._hard = [
+            [int(v) for v in self._attribute_values[k] if v >= thr[k]]
+            for k in range(self._targets.shape[1])
+        ]
+
+    @property
+    def _fast_enabled(self) -> bool:
+        return self._thr is not None and self.sampling_mode in (
+            "adversarial",
+            "unpredictable_target",
+        )
+
+    def _n_hard(self, target) -> int:
+        return int(sum(1 for k, v in enumerate(target) if v >= self._thr[k]))
+
+    def _fast_quadrant(self, rng):
+        """Cuadrilatero cuyas cuatro esquinas estan en el soporte y presentes."""
+        m = self._targets.shape[1]
+        for _ in range(64):
+            i, j = (int(x) for x in rng.choice(self._attribute_indices, 2, replace=False))
+            anchor = self._targets[int(rng.integers(len(self._targets)))]
+            shared = {k: int(anchor[k]) for k in range(m) if k not in (i, j)}
+            budget = self._support_c - sum(
+                1 for k, v in shared.items() if v >= self._thr[k]
+            )
+            if budget < 0:
+                continue
+            # con c<=1: si queda presupuesto, a lo sumo UNO de los cuatro
+            # valores del cuadrante puede ser dificil (dos crearian una esquina
+            # con dos dificiles)
+            pools = {}
+            hard_slot = None
+            if budget >= 1 and rng.random() < 0.5:
+                hard_slot = i if rng.random() < 0.5 else j
+            for k in (i, j):
+                pool = list(self._easy[k])
+                if k == hard_slot and self._hard[k]:
+                    pool = pool + [int(rng.choice(self._hard[k]))]
+                if len(pool) < 2:
+                    pool = None
+                pools[k] = pool
+            if pools[i] is None or pools[j] is None:
+                continue
+            a, b = (int(x) for x in rng.choice(pools[i], 2, replace=False))
+            c_, d = (int(x) for x in rng.choice(pools[j], 2, replace=False))
+            corners = []
+            ok = True
+            for va in (a, b):
+                for vb in (c_, d):
+                    t = [0] * m
+                    t[i], t[j] = va, vb
+                    for k, v in shared.items():
+                        t[k] = v
+                    t = tuple(t)
+                    if self._n_hard(t) > self._support_c or t not in self._index_by_target:
+                        ok = False
+                        break
+                    corners.append(t)
+                if not ok:
+                    break
+            if ok:
+                return i, j, (a, b), (c_, d), shared, corners
+        return None
+
+    def _fast_fourth(self, i, j, vals_i, vals_j, shared, corner, rng):
+        """Cuarta etiqueta adversarial, uniforme sobre el conjunto valido."""
+        m = self._targets.shape[1]
+        forb = [set() for _ in range(m)]
+        forb[i] = set(vals_i)
+        forb[j] = set(vals_j)
+        for k, v in shared.items():
+            forb[k] = {v}
+        if self.sampling_mode == "adversarial":
+            chg = list(range(m))
+        elif self.num_unpredictable_attributes == 1:
+            chg = [j]
+        else:
+            chg = [i, j]
+        fixed = {k: corner[k] for k in range(m) if k not in chg}
+        budget = self._support_c - sum(
+            1 for k, v in fixed.items() if v >= self._thr[k]
+        )
+        if budget < 0:
+            return None
+        easy = {k: [v for v in self._easy[k] if v not in forb[k]] for k in chg}
+        hard = {k: [v for v in self._hard[k] if v not in forb[k]] for k in chg}
+        # conteo por categoria, sin enumerar
+        n0 = 1
+        for k in chg:
+            n0 *= len(easy[k])
+        n1 = 0
+        if budget >= 1:
+            for k in chg:
+                prod = len(hard[k])
+                for l in chg:
+                    if l != k:
+                        prod *= len(easy[l])
+                n1 += prod
+        if n0 + n1 == 0:
+            return None
+        for _ in range(16):
+            hard_at = None
+            if n1 and rng.random() < n1 / (n0 + n1):
+                w = np.array(
+                    [
+                        len(hard[k]) * np.prod([len(easy[l]) for l in chg if l != k])
+                        for k in chg
+                    ],
+                    dtype=float,
+                )
+                hard_at = chg[int(rng.choice(len(chg), p=w / w.sum()))]
+            t = list(fixed.get(k, 0) for k in range(m))
+            for k in range(m):
+                if k not in chg:
+                    t[k] = fixed[k]
+            bad = False
+            for k in chg:
+                pool = hard[k] if k == hard_at else easy[k]
+                if not pool:
+                    bad = True
+                    break
+                t[k] = int(rng.choice(pool))
+            if bad:
+                continue
+            t = tuple(t)
+            if self._n_hard(t) <= self._support_c and t in self._index_by_target:
+                return t
+        return None
+
+    def _fast_group(self, index: int, attempt: int = 0):
+        """Cuadrilatero + cuarta adversarial. Cuatro indices consecutivos
+        comparten cuadrilatero y violan una esquina distinta cada uno."""
+        # semilla fija por cuadrilatero: los indices 4k..4k+3 comparten
+        # cuadrilatero y violan una esquina distinta cada uno
+        rng = np.random.default_rng([self._base_seed, index // 4, attempt])
+        corner_slot = index % 4
+        q = self._fast_quadrant(rng)
+        if q is None:
+            return None
+        i, j, vals_i, vals_j, shared, _ = q
+        # Reetiquetamos (a,b) y (c,d) para que la esquina a violar caiga
+        # siempre en el slot 3. El rectangulo es el mismo conjunto, pero asi se
+        # conserva la convencion de que el ultimo elemento es el objetivo: el
+        # residuo algebraico ac-ad-bc+bd y el caso (3,[0,1,2]) del mixer
+        # transformer leen las esquinas por posicion.
+        if corner_slot < 2:
+            vals_i = (vals_i[1], vals_i[0])
+        if corner_slot % 2 == 0:
+            vals_j = (vals_j[1], vals_j[0])
+        m = self._targets.shape[1]
+        corners = []
+        for va in vals_i:
+            for vb in vals_j:
+                t = [0] * m
+                t[i], t[j] = va, vb
+                for k, v in shared.items():
+                    t[k] = v
+                corners.append(tuple(t))
+        fourth = self._fast_fourth(i, j, vals_i, vals_j, shared, corners[3], rng)
+        if fourth is None:
+            return None
+        targets = corners[:3] + [fourth]
+        return self._select_indices(targets)
+
     def __len__(self) -> int:
         if self.deterministic:
             if self.precompute_deterministic:
@@ -287,6 +478,14 @@ class NonIIDWrapper(Dataset):
             images = self._stack_images(images)
             targets = torch.as_tensor(np.stack(targets))
             return images, targets
+        if self._fast_enabled:
+            for attempt in range(64):
+                indices = self._fast_group(index, attempt)
+                if indices is not None:
+                    images, targets = zip(*(self.dataset[idx] for idx in indices))
+                    images = self._stack_images(images)
+                    targets = torch.as_tensor(np.stack(targets))
+                    return images, targets
         for _ in range(self.max_resample_attempts):
             attr_a, attr_b = self.rng.choice(
                 self._attribute_indices, size=2, replace=False

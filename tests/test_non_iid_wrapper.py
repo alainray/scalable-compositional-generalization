@@ -289,3 +289,173 @@ def test_deterministic_sampling_rejects_invalid_strategy():
 
     with pytest.raises(ValueError, match="deterministic_sampling_strategy"):
         NonIIDWrapper(dataset, deterministic_sampling_strategy="bad_strategy")
+
+
+# --- muestreo adversarial constructivo (camino rapido) ---------------------
+#
+# Con el split ortotopico la pertenencia al soporte es contable
+# (#{i : z_i >= umbral_i} <= c), asi que el wrapper construye el cuadrilatero y
+# la cuarta etiqueta en vez de sortear a ciegas. Lo que sigue fija el contrato
+# de ese camino: las cuatro etiquetas existen en train, la esquina esperada
+# tambien, y cada modo viola exactamente los atributos que le tocan.
+
+ORTHOTOPIC_CARDINALITIES = (6, 6, 5, 4)
+ORTHOTOPIC_THRESHOLDS = (4, 4, 3, 3)
+
+
+class OrthotopicToyDataset(ToyDataset):
+    """Producto cartesiano recortado al soporte ortotopico ``n_hard <= c``."""
+
+    def __init__(self, cardinalities=ORTHOTOPIC_CARDINALITIES,
+                 thresholds=ORTHOTOPIC_THRESHOLDS, c=1):
+        super().__init__(attribute_cardinalities=cardinalities)
+        thresholds = np.asarray(thresholds)
+        n_hard = (self._dataset_targets >= thresholds).sum(axis=1)
+        self._dataset_targets = self._dataset_targets[n_hard <= c]
+        self.thresholds = thresholds
+        self.c = c
+
+
+def _orthotopic_wrapper(dataset, seed=0, **kwargs):
+    return NonIIDWrapper(
+        dataset,
+        seed=seed,
+        split_thresholds=dataset.thresholds,
+        split_c=dataset.c,
+        **kwargs,
+    )
+
+
+ADVERSARIAL_MODES = [
+    ({"sampling_mode": "adversarial"}, None),
+    ({"sampling_mode": "unpredictable_target",
+      "num_unpredictable_attributes": 2}, 2),
+    ({"sampling_mode": "unpredictable_target",
+      "num_unpredictable_attributes": 1}, 1),
+]
+
+
+def _expected_corner(first_three):
+    """Cuarta esquina que completa el rectangulo formado por las otras tres."""
+    expected = list(first_three[0])
+    for attr_idx in range(first_three.shape[1]):
+        values = list(first_three[:, attr_idx])
+        once = [v for v in set(values) if values.count(v) == 1]
+        if len(once) == 1:
+            expected[attr_idx] = once[0]
+    return tuple(int(v) for v in expected)
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", ADVERSARIAL_MODES)
+def test_fast_adversarial_targets_stay_inside_the_train_support(
+    mode_kwargs, num_violated
+):
+    dataset = OrthotopicToyDataset()
+    wrapper = _orthotopic_wrapper(dataset, **mode_kwargs)
+    assert wrapper._fast_enabled
+
+    present = {tuple(int(v) for v in row) for row in dataset._dataset_targets}
+    for index in range(120):
+        rows = _target_rows(wrapper[index][1])
+        for row in rows:
+            target = tuple(int(v) for v in row)
+            assert (target >= dataset.thresholds).sum() <= dataset.c
+            assert target in present
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", ADVERSARIAL_MODES)
+def test_fast_adversarial_expected_corner_exists_in_train(
+    mode_kwargs, num_violated
+):
+    # El cuarto elemento es impredecible, pero la esquina que *deberia* ir ahi
+    # tiene que existir: si no, la tarea es irresoluble por construccion y no
+    # mide nada sobre composicionalidad.
+    dataset = OrthotopicToyDataset()
+    wrapper = _orthotopic_wrapper(dataset, **mode_kwargs)
+
+    present = {tuple(int(v) for v in row) for row in dataset._dataset_targets}
+    for index in range(120):
+        rows = _target_rows(wrapper[index][1])
+        assert _expected_corner(rows[:3]) in present
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", ADVERSARIAL_MODES)
+def test_fast_adversarial_violates_exactly_the_designed_attributes(
+    mode_kwargs, num_violated
+):
+    dataset = OrthotopicToyDataset()
+    wrapper = _orthotopic_wrapper(dataset, **mode_kwargs)
+    num_attributes = dataset._dataset_targets.shape[1]
+
+    for index in range(120):
+        rows = _target_rows(wrapper[index][1])
+        first_three, target = rows[:3], rows[3]
+        expected = _expected_corner(first_three)
+        violated = [
+            idx for idx in range(num_attributes) if target[idx] != expected[idx]
+        ]
+        varying = [
+            idx
+            for idx in range(num_attributes)
+            if len(set(first_three[:, idx])) == 2
+        ]
+        assert len(varying) == 2
+
+        if num_violated is None:  # adversarial: ningun atributo es predecible
+            for attr_idx in range(num_attributes):
+                assert target[attr_idx] not in set(first_three[:, attr_idx])
+        else:
+            assert len(violated) == num_violated
+            assert set(violated).issubset(varying)
+            for attr_idx in range(num_attributes):
+                if attr_idx not in violated:
+                    assert target[attr_idx] == expected[attr_idx]
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", ADVERSARIAL_MODES)
+def test_fast_adversarial_consecutive_indices_share_one_quadrilateral(
+    mode_kwargs, num_violated
+):
+    # Los indices 4k..4k+3 reusan el mismo cuadrilatero y violan una esquina
+    # distinta cada uno, de modo que ninguna esquina queda sin ser objetivo.
+    dataset = OrthotopicToyDataset()
+    wrapper = _orthotopic_wrapper(dataset, **mode_kwargs)
+
+    for base in range(0, 80, 4):
+        rectangles, violated_corners = [], []
+        for offset in range(4):
+            rows = _target_rows(wrapper[base + offset][1])
+            corners = [tuple(int(v) for v in row) for row in rows[:3]]
+            expected = _expected_corner(rows[:3])
+            rectangles.append(frozenset(corners + [expected]))
+            violated_corners.append(expected)
+        assert len(set(rectangles)) == 1
+        assert len(set(violated_corners)) == 4
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", ADVERSARIAL_MODES)
+def test_fast_adversarial_still_reaches_hard_attribute_values(
+    mode_kwargs, num_violated
+):
+    # Sin valores dificiles el modelo nunca ve los conceptos que tiene que
+    # extrapolar, asi que el camino rapido no puede quedarse solo con faciles.
+    dataset = OrthotopicToyDataset()
+    wrapper = _orthotopic_wrapper(dataset, **mode_kwargs)
+
+    hard_seen = set()
+    for index in range(400):
+        for row in _target_rows(wrapper[index][1]):
+            for attr_idx, value in enumerate(row):
+                if value >= dataset.thresholds[attr_idx]:
+                    hard_seen.add(attr_idx)
+    assert hard_seen == set(range(dataset._dataset_targets.shape[1]))
+
+
+def test_fast_adversarial_path_is_disabled_without_a_support_rule():
+    dataset = OrthotopicToyDataset()
+    wrapper = NonIIDWrapper(dataset, seed=0, sampling_mode="adversarial")
+
+    assert not wrapper._fast_enabled
+    rows = _target_rows(wrapper[0][1])
+    for attr_idx in range(rows.shape[1]):
+        assert rows[3, attr_idx] not in set(rows[:3, attr_idx])

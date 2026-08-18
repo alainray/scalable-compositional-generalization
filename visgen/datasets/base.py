@@ -292,6 +292,11 @@ class BaseDataset(Dataset, ABC):
             raise ValueError("p and c cannot be both None!")
         cartesian_product = np.array(list(itertools.product(*split_attribute_values)))
         print(threshold_values)
+        # Guardados para que quien consuma el dataset pueda decidir la pertenencia
+        # al soporte contando difíciles (valor >= umbral) en vez de buscar la
+        # tupla: z esta en el soporte  <=>  #{i : z_i >= umbral_i} <= c
+        self.split_thresholds = np.asarray(threshold_values)
+        self.split_c = c
         included_combinations = cartesian_product[
             np.sum(cartesian_product >= threshold_values, axis=1) <= c
         ]

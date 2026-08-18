@@ -122,8 +122,11 @@ def _wrap_non_iid(dataset, cfg, split_name=None, fallback_seed=None):
 	if not allowed_attributes:
 		allowed_attributes = _config_attribute_names(cfg)
 	allowed_attributes = _filter_allowed_attributes(dataset, allowed_attributes)
+	base = _unwrap_subset(dataset)
 	return NonIIDWrapper(
 		dataset,
+		split_thresholds=getattr(base, "split_thresholds", None),
+		split_c=getattr(base, "split_c", None),
 		max_resample_attempts=non_iid_cfg.get("max_resample_attempts", 10_000),
 		seed=non_iid_cfg.get("seed", fallback_seed),
 		allowed_attributes=allowed_attributes,
