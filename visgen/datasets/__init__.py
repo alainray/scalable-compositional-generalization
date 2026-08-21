@@ -127,6 +127,7 @@ def _wrap_non_iid(dataset, cfg, split_name=None, fallback_seed=None):
 		dataset,
 		split_thresholds=getattr(base, "split_thresholds", None),
 		split_c=getattr(base, "split_c", None),
+		relaxed_fourth=non_iid_cfg.get("relaxed_fourth", False),
 		max_resample_attempts=non_iid_cfg.get("max_resample_attempts", 10_000),
 		seed=non_iid_cfg.get("seed", fallback_seed),
 		allowed_attributes=allowed_attributes,

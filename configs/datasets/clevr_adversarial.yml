@@ -18,6 +18,10 @@ data:
 
     num_workers: 0
     non_iid:
+      # clevr no tiene holgura de valores: con la regla estricta los
+      # cuadrilateros con material=1 se descartan enteros y ese valor
+      # nunca llega a entrenamiento. Ver visgen/datasets/non_iid.py.
+      relaxed_fourth: True
       name: non_iid
       seed: ${seed}
       apply_to: ["training"]

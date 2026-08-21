@@ -169,11 +169,13 @@ class NonIIDWrapper(Dataset):
         max_deterministic_resample_attempts: Optional[int] = None,
         split_thresholds=None,
         split_c: Optional[int] = None,
+        relaxed_fourth: bool = False,
     ) -> None:
         self.dataset = dataset
         self.max_resample_attempts = max_resample_attempts
         self.rng = np.random.default_rng(seed)
         self._base_seed = 0 if seed is None else int(seed)
+        self.relaxed_fourth = bool(relaxed_fourth)
         self.shared_other_attributes = shared_other_attributes
         self.sampling_mode = self._resolve_sampling_mode(sampling_mode, fully_iid)
         self.fully_iid = self.sampling_mode == "iid"
@@ -350,17 +352,38 @@ class NonIIDWrapper(Dataset):
     def _fast_fourth(self, i, j, vals_i, vals_j, shared, corner, rng):
         """Cuarta etiqueta adversarial, uniforme sobre el conjunto valido."""
         m = self._targets.shape[1]
-        forb = [set() for _ in range(m)]
-        forb[i] = set(vals_i)
-        forb[j] = set(vals_j)
-        for k, v in shared.items():
-            forb[k] = {v}
         if self.sampling_mode == "adversarial":
             chg = list(range(m))
         elif self.num_unpredictable_attributes == 1:
             chg = [j]
         else:
             chg = [i, j]
+        forb = [set() for _ in range(m)]
+        ctx = None
+        if self.relaxed_fourth:
+            # Solo se prohibe el valor ESPERADO, no los dos del rectangulo: la
+            # cuarta esquina puede reusar el otro. Hace falta donde el soporte
+            # no deja un tercer valor -- en clevr, con material=1 compartido el
+            # presupuesto de dificiles ya esta gastado y shape/size solo tienen
+            # dos faciles, los que el rectangulo ya usa, asi que la regla
+            # estricta descarta el cuadrilatero entero y material=1 nunca llega
+            # a entrenamiento. A cambio hay que rechazar a mano las tuplas que
+            # coincidan con una esquina del contexto, o el grupo sale repetido.
+            for k in chg:
+                forb[k] = {corner[k]}
+            ctx = set()
+            for va in vals_i:
+                for vb in vals_j:
+                    t = [0] * m
+                    t[i], t[j] = va, vb
+                    for k, v in shared.items():
+                        t[k] = v
+                    ctx.add(tuple(t))
+        else:
+            forb[i] = set(vals_i)
+            forb[j] = set(vals_j)
+            for k, v in shared.items():
+                forb[k] = {v}
         fixed = {k: corner[k] for k in range(m) if k not in chg}
         budget = self._support_c - sum(
             1 for k, v in fixed.items() if v >= self._thr[k]
@@ -409,6 +432,8 @@ class NonIIDWrapper(Dataset):
                 continue
             t = tuple(t)
             if self._n_hard(t) <= self._support_c and t in self._index_by_target:
+                if ctx is not None and t in ctx:
+                    continue
                 return t
         return None
 

@@ -459,3 +459,109 @@ def test_fast_adversarial_path_is_disabled_without_a_support_rule():
     rows = _target_rows(wrapper[0][1])
     for attr_idx in range(rows.shape[1]):
         assert rows[3, attr_idx] not in set(rows[:3, attr_idx])
+
+
+# --- politica relajada para soportes sin holgura -------------------------
+#
+# Con cardinalidades chicas la regla estricta (la 4a esquina debe diferir de
+# LOS DOS valores del rectangulo) puede no tener solucion: en clevr, con un
+# valor dificil compartido el presupuesto de c=1 ya esta gastado y los
+# atributos del cuadrante solo tienen dos faciles, los que el rectangulo ya
+# usa. El cuadrilatero se descarta entero y ese valor dificil nunca llega a
+# entrenamiento. relaxed_fourth exige diferir solo del valor ESPERADO, a
+# cambio de rechazar a mano las tuplas que repitan una esquina del contexto.
+
+# mismas cardinalidades y umbrales que clevr: material tiene 1 solo facil y
+# shape/size tienen 2, justo los que consume el rectangulo
+TIGHT_CARDINALITIES = (3, 3, 2, 8)
+TIGHT_THRESHOLDS = (2, 2, 1, 7)
+
+
+def _tight_dataset():
+    return OrthotopicToyDataset(cardinalities=TIGHT_CARDINALITIES,
+                                thresholds=TIGHT_THRESHOLDS, c=1)
+
+
+def _values_reaching_training(wrapper, num_attributes, num_items=600):
+    seen = [set() for _ in range(num_attributes)]
+    for index in range(num_items):
+        for row in _target_rows(wrapper[index][1]):
+            for attr_idx, value in enumerate(row):
+                seen[attr_idx].add(int(value))
+    return seen
+
+
+TIGHT_MODES = [
+    ({"sampling_mode": "unpredictable_target",
+      "num_unpredictable_attributes": 2}, 2),
+    ({"sampling_mode": "adversarial"}, None),
+]
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", TIGHT_MODES)
+def test_relaxed_fourth_recovers_values_the_strict_rule_drops(
+    mode_kwargs, num_violated
+):
+    dataset = _tight_dataset()
+    num_attributes = len(TIGHT_CARDINALITIES)
+
+    strict = _orthotopic_wrapper(dataset, **mode_kwargs)
+    relaxed = _orthotopic_wrapper(dataset, relaxed_fourth=True, **mode_kwargs)
+
+    strict_seen = _values_reaching_training(strict, num_attributes)
+    relaxed_seen = _values_reaching_training(relaxed, num_attributes)
+
+    for attr_idx, cardinality in enumerate(TIGHT_CARDINALITIES):
+        assert relaxed_seen[attr_idx] == set(range(cardinality))
+    # y el soporte apretado efectivamente deja fuera algun valor sin relajar,
+    # que es la razon de ser de la bandera
+    assert any(len(strict_seen[i]) < TIGHT_CARDINALITIES[i]
+               for i in range(num_attributes))
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", TIGHT_MODES)
+def test_relaxed_fourth_keeps_the_four_corners_distinct(
+    mode_kwargs, num_violated
+):
+    # Relajar sin esta condicion hace que la 4a esquina caiga encima de una del
+    # contexto y el rectangulo deje de serlo.
+    dataset = _tight_dataset()
+    wrapper = _orthotopic_wrapper(dataset, relaxed_fourth=True, **mode_kwargs)
+
+    for index in range(600):
+        rows = _target_rows(wrapper[index][1])
+        corners = {tuple(int(v) for v in row) for row in rows}
+        assert len(corners) == 4
+
+
+@pytest.mark.parametrize("mode_kwargs,num_violated", TIGHT_MODES)
+def test_relaxed_fourth_keeps_the_support_and_violation_contract(
+    mode_kwargs, num_violated
+):
+    dataset = _tight_dataset()
+    wrapper = _orthotopic_wrapper(dataset, relaxed_fourth=True, **mode_kwargs)
+    present = {tuple(int(v) for v in row) for row in dataset._dataset_targets}
+    num_attributes = len(TIGHT_CARDINALITIES)
+
+    for index in range(600):
+        rows = _target_rows(wrapper[index][1])
+        for row in rows:
+            target = tuple(int(v) for v in row)
+            assert (target >= dataset.thresholds).sum() <= dataset.c
+            assert target in present
+
+        expected = _expected_corner(rows[:3])
+        assert expected in present
+        violated = [i for i in range(num_attributes) if rows[3][i] != expected[i]]
+        # la 4a sigue siendo impredecible en los atributos que toca; lo que
+        # cambia es que puede reusar un valor del contexto, no que viole menos
+        if num_violated is None:
+            assert len(violated) == num_attributes
+        else:
+            assert len(violated) == num_violated
+
+
+def test_relaxed_fourth_is_disabled_by_default():
+    dataset = _tight_dataset()
+    wrapper = _orthotopic_wrapper(dataset, sampling_mode="adversarial")
+    assert wrapper.relaxed_fourth is False
