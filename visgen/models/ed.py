@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from visgen.utils.general import plot_box, plot_codebooks_similarity
 from .base import BaseModel
@@ -102,9 +103,15 @@ class ExpDisentanglementMixer(ExpDisentanglement):
         use_all_mixer_cases: bool = False,
         mixer_mode: str = "transformer",
         algebraic_use_all_terms: bool = True,
+        algebraic_norm: str = "none",
         *args,
         **kwargs,
     ):
+        if algebraic_norm not in ("none", "unit", "relative"):
+            raise ValueError(
+                "algebraic_norm debe ser 'none', 'unit' o 'relative', "
+                f"no {algebraic_norm!r}."
+            )
         super().__init__(
             preprocessing=preprocessing,
             feature_extractors=feature_extractors,
@@ -154,7 +161,39 @@ class ExpDisentanglementMixer(ExpDisentanglement):
         self.mixer_detach_target = mixer_detach_target
         self.use_mixer_classifier = use_mixer_classifier
         self.use_all_mixer_cases = use_all_mixer_cases
-        self._logged_metrics = self._logged_metrics + ["mixer_loss", "total_loss"]
+        self.algebraic_norm = algebraic_norm
+        self._logged_metrics = self._logged_metrics + [
+            "mixer_loss", "total_loss", "rep_norm",
+        ]
+
+    def _piece_norm(self, reps):
+        """Norma L2 media de cada pieza de z_dim de la representacion."""
+        chunks = torch.split(reps.detach(), self.z_dim, dim=-1)
+        return torch.stack([c.norm(dim=-1).mean() for c in chunks]).mean()
+
+    def _algebraic_loss(self, reps):
+        """Residuo ac - ad - bc + bd, con la escala tratada segun algebraic_norm.
+
+        El readout de ED clasifica con F.normalize seguido de cosine_similarity,
+        asi que la perdida de clasificacion solo ve la DIRECCION de cada pieza.
+        El residuo crudo, en cambio, escala con ||rep||^2, de modo que encoger la
+        norma lo lleva a cero sin costo alguno para la clasificacion: un minimo
+        degenerado que el modelo puede tomar gratis. AIN no lo tiene porque su
+        clasificador es lineal y si depende de la magnitud.
+
+        'unit' normaliza cada pieza antes del residuo, que es exactamente lo que
+        el readout ve. 'relative' divide por la escala, conservando la semantica
+        aditiva del residuo. El denominador NO se desprende del grafo: es lo que
+        hace el cociente invariante a escala en ambos sentidos.
+        """
+        if self.algebraic_norm == "unit":
+            chunks = torch.split(reps, self.z_dim, dim=-1)
+            reps = torch.cat([F.normalize(c, dim=-1) for c in chunks], dim=-1)
+        residual = reps[:, 0, :] - reps[:, 1, :] - reps[:, 2, :] + reps[:, 3, :]
+        loss = residual.pow(2).mean()
+        if self.algebraic_norm == "relative":
+            loss = loss / (reps.pow(2).mean() + 1e-8)
+        return loss
 
     def _unwrap_readout_output(self, out):
         return out[0] if isinstance(out, list) else out
@@ -207,12 +246,7 @@ class ExpDisentanglementMixer(ExpDisentanglement):
             mixer_loss = torch.tensor(0.0, device=reps.device)
             if num_views >= 4:
                 if self.mixer_mode == "algebraic":
-                    rep_ac = reps[:, 0, :]
-                    rep_ad = reps[:, 1, :]
-                    rep_bc = reps[:, 2, :]
-                    rep_bd = reps[:, 3, :]
-                    residual = rep_ac - rep_ad - rep_bc + rep_bd
-                    algebraic_loss = (residual.pow(2)).mean()
+                    algebraic_loss = self._algebraic_loss(reps)
                     if self.algebraic_use_all_terms:
                         mixer_loss = 4.0 * algebraic_loss
                     else:
@@ -249,10 +283,12 @@ class ExpDisentanglementMixer(ExpDisentanglement):
                         mixer_loss = torch.stack(mixer_terms).mean()
                 if not torch.isfinite(mixer_loss):
                     mixer_loss = torch.zeros_like(mixer_loss)
+            log_dict["rep_norm"] = self._piece_norm(reps_flat).item()
             return cls_loss, mixer_loss, log_dict
         reps = self._encode_representations(x)
         cls_loss, log_dict = self._compute_classification(reps, y)
         mixer_loss = torch.tensor(0.0, device=reps.device)
+        log_dict["rep_norm"] = self._piece_norm(reps).item()
         return cls_loss, mixer_loss, log_dict
 
     def forward(self, x):
