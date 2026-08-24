@@ -85,7 +85,7 @@ for c in "${C[@]}"; do
             data.training.split=$split --seed=$seed  data.training.c=$c data.testing.c=$c \
             data.training.attr_difficulty=$difficulty data.testing.attr_difficulty=$difficulty data.training.num_workers=0 data.testing.num_workers=0 \
             training.trainer=crm \
-            logger.name=wandb path.base="$HOME"/storage/investigacion/licg/scalable-compositional-generalization/out
+            logger.name=wandb path.base="${OUT_BASE:-$HOME/storage/investigacion/licg/scalable-compositional-generalization/out}"
         done
     done
 done

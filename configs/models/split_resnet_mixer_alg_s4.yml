@@ -9,7 +9,7 @@ model:
   exit_reg: 10
   mixer:
     mode: algebraic
-    loss_weight: 1.0
+    loss_weight: 1.5
     algebraic_use_all_terms: True
 
 training:

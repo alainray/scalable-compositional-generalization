@@ -1,0 +1,32 @@
+model:
+  arch: split_resnet_mixer
+  pretrained: False
+  emb_dim: 512
+  maxpool: 1
+  out_activation: linear
+  activation: relu
+  split_layers: 0
+  exit_reg: 10
+  # CRM: no bias on the per-attribute heads, so that the per-group table B_hat
+  # stays identifiable (see crm_resnet18.yml).
+  head_bias: False
+  mixer:
+    # Analogical / parallelogram term on the split representations:
+    #   ||rep_ac - rep_ad - rep_bc + rep_bd||^2
+    # Requires 4-view batches, i.e. a `*_non_iid.yml` data config.
+    mode: algebraic
+    algebraic_use_all_terms: True
+    # picked up by CRMTrainer as the weight of the auxiliary term:
+    #   total = crm_group_ce + loss_weight * algebraic
+    loss_weight: 1.5
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    # 4 views per item, so the effective rows per step are 4x this
+    batch_size: 64
+  testing:
+    batch_size: 1024
