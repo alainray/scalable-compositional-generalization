@@ -1,0 +1,34 @@
+# CRM sobre ResNet18 + termino algebraico del mixer.
+#
+# El entrenador CRM reemplaza la clasificacion por la cross-entropy de grupo y
+# suma el termino composicional del modelo envuelto:
+#   total = crm_group_ce + loss_weight * algebraico
+# Eso exige que el modelo exponga crm_outputs(); ResNet18Mixer lo implementa.
+#
+# head_bias: False es obligatorio -- un bias por atributo seria redundante e
+# inidentificable contra la tabla B_hat por grupo que CRM aprende.
+#
+# Necesita un data config *_non_iid.yml: el termino algebraico
+# ||rep_ac - rep_ad - rep_bc + rep_bd||^2 requiere lotes de 4 vistas.
+model:
+  arch: resnet18_mixer
+  pretrained: False
+  emb_dim: 512
+  maxpool: 1
+  out_activation: linear
+  activation: relu
+  head_bias: False
+  mixer:
+    mode: algebraic
+    algebraic_use_all_terms: True
+    loss_weight: 1.5
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    batch_size: 64
+  testing:
+    batch_size: 1024
