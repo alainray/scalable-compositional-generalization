@@ -27,6 +27,6 @@ training:
 data:
   training:
     # 4 views per item, so the effective rows per step are 4x this
-    batch_size: 64
+    batch_size: 256
   testing:
-    batch_size: 1024
+    batch_size: 2048
