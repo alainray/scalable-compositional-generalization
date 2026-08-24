@@ -74,7 +74,7 @@ for c in "${C[@]}"; do
         # the analogical term needs 4-view batches, which only the non_iid
         # dataset configs produce
         case "$model" in
-            *_mixer) data_cfg="configs/datasets/${dataset}_non_iid.yml" ;;
+            *_mixer|*_mixer_*) data_cfg="configs/datasets/${dataset}_non_iid.yml" ;;
             *)       data_cfg="configs/datasets/${dataset}.yml" ;;
         esac
         for seed in "${SEEDS[@]}"; do
