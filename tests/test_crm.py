@@ -524,3 +524,93 @@ def test_real_split_mixer_without_four_views_has_no_aux_term():
     with torch.no_grad():
         _, aux = model.crm_outputs(torch.randn(4, 1, 32, 32))
     assert aux.item() == 0.0
+
+
+# -- que aporta exactamente el paso 2 -------------------------------------
+#
+# Con Ze = producto cartesiano completo, prior de test uniforme y energias
+# aditivas (s(x,z) = sum_i E_i(x, z_i)), el argmax conjunto de CRM factoriza
+# exactamente en el argmax por atributo. Es decir: sin B*, `crm_acc` no puede
+# diferir de `baseline_acc`, y toda la diferencia entre ambos mide el aporte
+# del paso 2. Esto sostiene la ablacion "solo perdida de CRM" vs "CRM full".
+
+
+def _wrapper_on_full_product(sizes=ATTRIBUTE_SIZES, seed=0):
+    targets = full_product_targets(sizes)
+    support = GroupSupport.from_targets(targets, sizes)
+    torch.manual_seed(seed)
+    model = _FakeSplitMixer(sizes)
+    return CRMWrapper(model, support, report_baseline_metrics=True)
+
+
+def test_joint_decision_equals_per_attribute_argmax_without_b_star():
+    wrapper = _wrapper_on_full_product()
+    assert wrapper.support.eval_groups.shape[0] == int(
+        torch.tensor(ATTRIBUTE_SIZES).prod()
+    )
+    energies = random_energies(64, ATTRIBUTE_SIZES, seed=7)
+
+    # b_star arranca en ceros y el prior de test es uniforme
+    assert torch.count_nonzero(wrapper.b_star) == 0
+    assert wrapper.test_prior == "uniform"
+
+    joint = wrapper.predict_groups(energies, extrapolate=True)
+    per_attribute = torch.stack([e.argmax(dim=-1) for e in energies], dim=1)
+    assert torch.equal(joint, per_attribute)
+
+
+def test_crm_and_baseline_accuracy_coincide_without_b_star():
+    wrapper = _wrapper_on_full_product()
+    energies = random_energies(64, ATTRIBUTE_SIZES, seed=11)
+    targets = torch.stack(
+        [torch.randint(0, s, (64,)) for s in ATTRIBUTE_SIZES], dim=1
+    )
+
+    metrics = wrapper._crm_metrics(energies, targets)
+    assert metrics["crm_acc"] == pytest.approx(metrics["baseline_acc"])
+
+
+def test_a_non_zero_b_star_is_what_makes_them_differ():
+    # El contrapunto: en cuanto B* deja de ser constante, la decision conjunta
+    # se separa del argmax por atributo. Ese delta es lo que reporta la
+    # ablacion como aporte (o dano) del paso 2.
+    wrapper = _wrapper_on_full_product()
+    energies = random_energies(64, ATTRIBUTE_SIZES, seed=13)
+    before = wrapper.predict_groups(energies, extrapolate=True)
+
+    torch.manual_seed(3)
+    wrapper.b_star.copy_(torch.randn_like(wrapper.b_star) * 5.0)
+    wrapper.has_b_star.fill_(True)
+    after = wrapper.predict_groups(energies, extrapolate=True)
+
+    assert not torch.equal(before, after)
+
+
+def test_a_constant_b_star_leaves_the_decision_unchanged():
+    # B* solo esta identificado salvo constante aditiva: sumarle un escalar a
+    # todos los grupos no puede cambiar el argmax.
+    wrapper = _wrapper_on_full_product()
+    energies = random_energies(64, ATTRIBUTE_SIZES, seed=17)
+    before = wrapper.predict_groups(energies, extrapolate=True)
+
+    wrapper.b_star.fill_(3.7)
+    wrapper.has_b_star.fill_(True)
+    assert torch.equal(wrapper.predict_groups(energies, extrapolate=True), before)
+
+
+def test_naive_rule_cannot_hit_a_group_absent_from_training():
+    # Por que crm_naive_acc sale 0 en nuestros splits: la regla naive enmascara
+    # a -inf todo grupo no visto en train, y el test composicional esta hecho
+    # exactamente de grupos no vistos.
+    sizes = ATTRIBUTE_SIZES
+    full = full_product_targets(sizes)
+    seen = full[: len(full) // 2]
+    # eval sigue siendo el producto completo; train ve solo la mitad
+    support = GroupSupport.from_targets(seen, sizes, eval_group_set="full_product")
+    torch.manual_seed(0)
+    wrapper = CRMWrapper(_FakeSplitMixer(sizes), support)
+
+    energies = random_energies(64, sizes, seed=19)
+    pred = wrapper.predict_groups(energies, extrapolate=False)
+    seen_codes = {tuple(int(v) for v in g) for g in seen}
+    assert all(tuple(int(v) for v in p) in seen_codes for p in pred)
