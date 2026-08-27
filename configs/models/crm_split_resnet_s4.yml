@@ -1,0 +1,38 @@
+# Equivalente estructural de ED, sin su readout.
+#
+# Con split_layers: 4 cada atributo recibe su propio conv1/bn1/maxpool mas las
+# cuatro etapas residuales, y shared_blocks queda vacio: una ResNet18 completa
+# e independiente por atributo, que es exactamente la topologia de los
+# feature_extractors de ED. La diferencia es el readout -- aqui lineal, en ED
+# una convolucion circular por FFT seguida de coseno contra un codebook FPE.
+#
+# Eso saca del analisis la normalizacion del readout de ED (F.normalize +
+# cosine_similarity, que vuelve la clasificacion invariante a ||rep|| y deja al
+# termino algebraico un minimo degenerado por contraccion) y la semantica de
+# fase del codebook. Ver visgen/models/modules/readouts.py y ed.py.
+#
+# El batch se mantiene igual al de la variante a split_layers: 0 para que la
+# unica diferencia entre ambas sea la profundidad.
+model:
+  arch: split_resnet
+  pretrained: False
+  emb_dim: 512
+  maxpool: 1
+  out_activation: linear
+  activation: relu
+  split_layers: 4
+  exit_reg: 10
+  # SplitResNet18 reads logits straight off the raw 512-d branch features; CRM
+  # needs a real per-attribute readout, without bias (see crm_resnet18.yml).
+  use_task_classifiers: True
+  head_bias: False
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    batch_size: 1024
+  testing:
+    batch_size: 1024
