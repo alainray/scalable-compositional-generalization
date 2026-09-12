@@ -1,0 +1,29 @@
+# AIN sin LATTICE: lambda=0 de la serie lattice_ain_alg_l_*.
+# En modo algebraico el mixer no tiene modulo (self.mixer is None), asi que con
+# loss_weight 0 esto es exactamente split_resnet con split_layers=0 -- la misma
+# arquitectura, el mismo batch y los mismos datos que lattice_ain_alg_l_1.5,
+# con el termino de paralelogramo apagado. Es el control pareado del delta de
+# LATTICE sobre AIN.
+model:
+  arch: split_resnet_mixer
+  pretrained: False
+  emb_dim: 512
+  maxpool: 1
+  out_activation: linear
+  activation: relu
+  split_layers: 0
+  exit_reg: 10
+  mixer:
+    mode: algebraic
+    loss_weight: 0.0
+    algebraic_use_all_terms: True
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    batch_size: 256
+  testing:
+    batch_size: 2048

@@ -1,0 +1,25 @@
+# ResNet18 + LATTICE algebraico, lambda=1.5.
+# Control sin CRM de crm_resnet18_mixer_l15, y contraparte sobre backbone
+# monolitico de lattice_ain_alg_l_1.5. Mismo lambda y mismos batch sizes que
+# esos dos para que el delta de LATTICE no quede confundido.
+model:
+  arch: resnet18_mixer
+  pretrained: False
+  emb_dim: 512
+  maxpool: 1
+  out_activation: linear
+  activation: relu
+  mixer:
+    mode: algebraic
+    loss_weight: 1.5
+    algebraic_use_all_terms: True
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    batch_size: 256
+  testing:
+    batch_size: 2048
