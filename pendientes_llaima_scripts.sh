@@ -34,36 +34,61 @@
 
 # ============ AIN sin LATTICE (lattice_ain_alg_l_0, lambda=0) =============
 
-for s in 1 2 3 4 5; do
-  sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_ain_alg_l_0,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- cars3d (500 epocas), 06 h por semilla ---
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_ain_alg_l_0,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_ain_alg_l_0,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_ain_alg_l_0,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_ain_alg_l_0,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_ain_alg_l_0,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
 
-for s in 1 2 3 4 5; do
-  sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_ain_alg_l_0,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- iraven (50 epocas), 04 h por semilla ---
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_ain_alg_l_0,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_ain_alg_l_0,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_ain_alg_l_0,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_ain_alg_l_0,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_ain_alg_l_0,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
 
-for s in 1 2 3 4 5; do
-  sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_ain_alg_l_0,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- dsprites (50 epocas), 08 h por semilla ---
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_ain_alg_l_0,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_ain_alg_l_0,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_ain_alg_l_0,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_ain_alg_l_0,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_ain_alg_l_0,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
 
-for s in 1 2 3 4 5; do
-  sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_ain_alg_l_0,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- shapes3d (50 epocas), 08 h por semilla ---
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_ain_alg_l_0,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_ain_alg_l_0,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_ain_alg_l_0,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_ain_alg_l_0,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_ain_alg_l_0,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
 
 # ====== ResNet-18 + LATTICE (lattice_resnet18_alg_l_1.5, lambda=1.5) ======
 
-for s in 1 2 3 4 5; do
-  sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_resnet18_alg_l_1.5,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- cars3d (500 epocas), 06 h por semilla ---
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_resnet18_alg_l_1.5,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_resnet18_alg_l_1.5,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_resnet18_alg_l_1.5,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_resnet18_alg_l_1.5,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=06:00:00 --export=ALL,ds=cars3d,model=lattice_resnet18_alg_l_1.5,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
 
-for s in 1 2 3 4 5; do
-  sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_resnet18_alg_l_1.5,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- iraven (50 epocas), 04 h por semilla ---
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_resnet18_alg_l_1.5,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_resnet18_alg_l_1.5,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_resnet18_alg_l_1.5,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_resnet18_alg_l_1.5,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=04:00:00 --export=ALL,ds=iraven,model=lattice_resnet18_alg_l_1.5,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
 
-for s in 1 2 3 4 5; do
-  sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_resnet18_alg_l_1.5,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- dsprites (50 epocas), 08 h por semilla ---
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_resnet18_alg_l_1.5,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_resnet18_alg_l_1.5,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_resnet18_alg_l_1.5,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_resnet18_alg_l_1.5,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=dsprites,model=lattice_resnet18_alg_l_1.5,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
 
-for s in 1 2 3 4 5; do
-  sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_resnet18_alg_l_1.5,seeds=$s,flavor=non_iid,nw=0 run_pending_llaima.sh
-done
+# --- shapes3d (50 epocas), 08 h por semilla ---
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_resnet18_alg_l_1.5,seeds=1,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_resnet18_alg_l_1.5,seeds=2,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_resnet18_alg_l_1.5,seeds=3,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_resnet18_alg_l_1.5,seeds=4,flavor=non_iid,nw=0 run_pending_llaima.sh
+sbatch --time=08:00:00 --export=ALL,ds=shapes3d,model=lattice_resnet18_alg_l_1.5,seeds=5,flavor=non_iid,nw=0 run_pending_llaima.sh
+
