@@ -1,0 +1,33 @@
+training:
+  trainer: crm
+  fp-16: true
+  n_epoch: 50
+  verbose: true
+  checkpointing: true
+  log_steps: 5
+  optimizer:
+    name: adamw
+  objective: classification
+  loss:
+    name: cross_entropy
+  metrics:
+  - name: multi_accuracy
+  if_exists: retrain
+  selection_metric: val_acc
+  representation_metrics:
+    enabled: true
+    split:
+    - val_4cases
+    - testing
+    every_n_epochs: 1
+    max_samples: 5000
+  crm:
+    b_weight_decay: 0.0001
+    eval_group_set: full_product
+    test_prior: uniform
+    group_chunk: 65536
+    extrapolate_every_n_epochs: 0
+    extrapolate_num_samples: 20000
+    final_extrapolate_num_samples: null
+    report_baseline_metrics: true
+    crm_metrics_on_train: false

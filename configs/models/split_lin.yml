@@ -1,0 +1,25 @@
+# AIN con readout lineal por atributo (con bias), sin LATTICE ni CRM.
+# Mismo readout que las filas + LATTICE; contra las filas + CRM solo cambia el
+# bias, que CRM elimina por identificabilidad. Nombre propio para no escribir
+# sobre metrics/*/split, que usa el readout viejo (features crudas rebanadas).
+model:
+  arch: split_resnet
+  pretrained: False
+  emb_dim: 512
+  maxpool: 1
+  out_activation: linear
+  activation: relu
+  split_layers: 0
+  exit_reg: 10
+  use_task_classifiers: True
+  head_bias: True
+
+training:
+  optimizer:
+    lr: 0.001
+
+data:
+  training:
+    batch_size: 2048
+  testing:
+    batch_size: 4096
